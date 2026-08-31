@@ -21,3 +21,6 @@ corpus/candidates.jsonl
 traces/
 
 .DS_Store
+
+# Claude Code local session settings — personal, not project config
+.claude/settings.local.json
