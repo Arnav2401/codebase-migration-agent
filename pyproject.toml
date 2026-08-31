@@ -45,6 +45,7 @@ packages = ["src/pmigrate"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["tests/graph/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

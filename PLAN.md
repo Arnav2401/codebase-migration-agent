@@ -166,11 +166,18 @@ project_creation/
 │   └── scripts/                # discovery, validation, baseline capture
 ├── src/pmigrate/
 │   ├── graph/                  # Phase 1: tree-sitter → Neo4j
+│   │   ├── ir.py                # parser's intermediate representation
 │   │   ├── parser.py           # tree-sitter → IR
 │   │   ├── resolver.py         # import resolution (the hard part)
-│   │   ├── store.py            # Neo4j writes
-│   │   ├── queries.py          # dependents/dependencies/topo-order
-│   │   └── relevance.py        # which symbols touch pydantic → the work list
+│   │   ├── toposort.py         # Tarjan SCC + condensation order — pure, backend-independent
+│   │   ├── relevance.py        # which symbols touch pydantic → the work list
+│   │   ├── protocol.py         # the CodeGraph contract both backends implement
+│   │   ├── build.py             # pure SymbolRef/edge construction, shared by both backends
+│   │   ├── repo_files.py       # shared file-reading for ingest()
+│   │   ├── token_budget.py     # shared neighbourhood() truncation heuristic
+│   │   ├── memory_store.py     # in-memory CodeGraph — tested end-to-end (see decisions.md D2/D11)
+│   │   ├── store.py            # Neo4j CodeGraph — real Cypher, UNVERIFIED (no live Neo4j here)
+│   │   └── queries.py          # Cypher query text used by store.py
 │   ├── sandbox/                # Phase 2
 │   │   ├── image.py            # build + cache docker images per repo@commit
 │   │   ├── runner.py           # execute tests, structured results

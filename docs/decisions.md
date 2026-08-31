@@ -176,6 +176,36 @@ it can influence what the model *wants* to do, but not what the tool layer permi
 
 ---
 
+## D11 — Built the in-memory CodeGraph backend first, and it's what's actually tested
+
+**Alternatives:** wait for Neo4j to be available and build only that · mock the Neo4j
+driver in tests.
+
+**Why:** D2 already pre-approved this swap ("the in-memory networkx backend is a 1-day
+swap... don't let it block Phase 3"), and Neo4j wasn't installed while Phase 1 was being
+built. Rather than writing Cypher I couldn't run and calling it done, the CodeGraph
+protocol was implemented twice against the identical shared graph-construction function
+(`build.py`): once as plain Python dicts (`memory_store.py`, exercised by the full test
+suite — ingest, dependents, dependencies, topo_modules, neighbourhood, all passing against
+a hand-built fixture repo), once as real Cypher (`store.py`, matching the documented schema
+but never run against a live database). Mocking the driver would have given false
+confidence — a mocked `execute_query` proves the code calls the mock correctly, not that
+the Cypher is right. An actually-working alternate backend proves the *contract* is right,
+which is what Phase 3 needs from this layer regardless of which backend eventually runs.
+
+**Also note, honestly:** neither backend populates CALLS or REFERENCES edges (one
+first-party symbol calling/using another) — that needs scope-aware name resolution that
+wasn't built. `dependents`/`dependencies` today answer via CONTAINS, IMPORTS, and INHERITS
+only. See build.py's docstring for the full scope statement.
+
+**Interview:** "I built the graph against a protocol and implemented it twice — once as a
+tested in-memory backend, once as real but unverified Cypher — because Neo4j wasn't
+available while I was building this, and a mocked database test would have proven the code
+calls a mock correctly, not that the queries are right. The in-memory version is what
+actually proves the interface works."
+
+---
+
 ## Template
 
 ```

@@ -97,6 +97,18 @@ def work_list(graph: CodeGraph, repo_id: str) -> list[list[MigrationUnit]]:
 
 > The retrieval layer produces the *task list*, not just context. That's the point.
 
+**Implementation update (Phase 1 build):** the signature above assumed a `CodeGraph` alone
+carries enough information to answer "does this symbol need migrating." In practice signal
+detection needs decorator names, call sites, and `Field()` kwargs — the parsed IR — which a
+`CodeGraph` has no reason to retain once it's built the node/edge structure (retaining it
+would mean bloating every Symbol node with parser-specific properties, or re-parsing at
+query time and losing "ingest once, query many times"). The actual implementation is
+`relevance.compute_work_list(resolved: ResolvedRepo, repo_id: str) -> list[list[MigrationUnit]]`,
+operating directly on resolver.py's output instead of a `CodeGraph`. Worth deciding for real
+once Phase 3 wires up the planner: either `CodeGraph` grows a `signals(ref) -> frozenset[str]`
+query backed by properties computed at ingest time, or the planner keeps the `ResolvedRepo`
+around alongside the graph. Not resolved — flagged here rather than silently diverged.
+
 ---
 
 ## 3. Sandbox (Phase 2)
