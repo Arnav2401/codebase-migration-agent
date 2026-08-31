@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# corpus checkouts and captured logs — large, reproducible from manifest.json
+corpus/checkouts/
+corpus/logs/
+corpus/candidates.jsonl
+
+# traces are large and regenerable; keep docs/results/ (the generated tables) committed
+traces/
+
+.DS_Store
