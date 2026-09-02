@@ -26,29 +26,29 @@ neo4j-down:
 	docker compose down
 
 lint:
-	ruff check src tests
-	ruff format --check src tests
+	.venv/bin/ruff check src tests
+	.venv/bin/ruff format --check src tests
 
 format:
-	ruff format src tests
-	ruff check --fix src tests
+	.venv/bin/ruff format src tests
+	.venv/bin/ruff check --fix src tests
 
 typecheck:
-	mypy src/pmigrate
+	.venv/bin/mypy src/pmigrate
 
 test:
-	pytest -q
+	.venv/bin/pytest -q
 
 # Phase 0 targets
 corpus:
-	python -m pmigrate.corpus.discover
-	python -m pmigrate.corpus.validate
+	.venv/bin/python -m pmigrate.corpus.discover
+	.venv/bin/python -m pmigrate.corpus.validate
 
 corpus-baselines:
-	python -m pmigrate.corpus.capture_baselines --manifest corpus/manifest.json
+	.venv/bin/python -m pmigrate.corpus.capture_baselines --manifest corpus/manifest.json
 
 eval:
-	python -m pmigrate.eval.harness --config $(CONFIG) --split $(SPLIT)
+	.venv/bin/python -m pmigrate.eval.harness --config $(CONFIG) --split $(SPLIT)
 
 clean:
 	find . -name '__pycache__' -exec rm -rf {} +
