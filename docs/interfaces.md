@@ -152,6 +152,31 @@ class Sandbox(Protocol):
 Key detail: `run_tests` mounts the repo read-only and applies the agent's edits as a
 writable overlay, so a run can never corrupt the corpus checkout.
 
+**Implementation update (Phase 2 build):** `ImageRef` was referenced but never typed above.
+Decided shape:
+
+```python
+@dataclass(frozen=True)
+class ImageRef:
+    tag: str
+    repo_id: str
+    sha: str
+    pydantic: Literal["v1", "v2"]
+    deps_hash: str
+    test_cmd: tuple[str, ...]   # travels with the image since run_tests() takes no RepoSpec
+```
+
+Also, `workdir_overlay` is `Path | None` in the real signature, not `Path` — a run with no
+edits yet (the first full-suite baseline check before the agent has touched anything) has
+nothing to overlay.
+
+**A real finding worth keeping, not just a note:** verified locally (no Docker needed —
+this is about pytest's own behavior) that without `--continue-on-collection-errors`, a
+single broken import in ONE file aborts pytest's *entire session* — `report["tests"]`
+comes back completely empty even for files with nothing wrong. Naive code reading that as
+"0 failures, so it passed" would silently report every migration that breaks an import as
+a clean success. `runner.py` passes the flag unconditionally; see docs/decisions.md D12.
+
 ---
 
 ## 4. Codemod (Phase 3, tier T1)
@@ -214,6 +239,54 @@ class BudgetState:
     def exceeded(self) -> str | None: ...   # returns the breached limit's name
 ```
 
+**Implementation update (Phase 3 build):** `AgentState` is real (`agent/state.py`), `status:
+Literal["running","done","budget_exceeded","no_progress","failed"]` was added — the graph
+needs somewhere to record *why* a run stopped, not just that it did. `BudgetState` is real
+and immutable as sketched (`spend()`/`next_iteration()` return new instances; LangGraph node
+functions return partial-update dicts it merges in, verified interactively before wiring
+the graph — they must not mutate state in place).
+
+The standalone tool-function list above (`read_file`, `search_symbol`, etc., meant to be
+exposed to the model) was NOT built this way. What's built instead: `apply_patch` exists
+exactly as specified (`agent/patch.py`) and is the enforced chokepoint. The graph→CodeGraph
+read tools (`search_symbol`/`get_dependents`/`get_dependencies`) are still deferred — no T2
+prompt actually retrieves graph context yet, so there's nothing to call them from. What IS
+built and tested end-to-end: the **T1-only path** — `agent/graph.py`'s LangGraph state
+machine runs codemods, applies patches, runs tests, and routes on budget/no-progress/
+completion with zero LLM involvement, exactly matching docs/phase-3-loop.md's "T1-only is
+runnable as a config" acceptance criterion.
+
+`repair()` — the T2/T3 node that calls the model on a failing test run — is real, exercised
+against a live model, and now actually applies what it produces (docs/decisions.md
+D24/D25/D28), not just `FakeModelClient`. There is still no `ANTHROPIC_API_KEY` in this
+environment; `GeminiModelClient` (`agent/model_client.py`) implements the same `ModelClient`
+Protocol against Google's Generative Language API instead, verified live (a real
+`generateContent` call, real token/cost accounting, sourced pricing). Full path, via
+`agent/repair.py`: identify a target file from the failure (two strategies — traceback path
+parsing, or grepping the repo for a class named in a pydantic `ValidationError` message, D25
+explains why one heuristic doesn't cover both real failure shapes) → find any LOCAL base
+classes that target file's own classes inherit from but don't define themselves (D28 — a
+name-based LibCST heuristic, not full import resolution) → build a prompt with every
+resulting file's content and the failure text → ask the model which file(s) actually need
+changes and for each one's corrected full content (not a diff — D25 on why) → compute each
+diff via the existing `make_unified_diff` → apply each through the same `apply_patch`
+chokepoint T1 already uses. A real failure anywhere in that chain (no identifiable target,
+no usable response, a model-client exception, a model-named path never shown as context) is
+handled explicitly rather than silently producing a bad edit — see D24/D25/D28. Not yet
+built: real graph-retrieved context (`search_symbol`/`get_dependents` — D28 explains why a
+narrower name-based heuristic covers what's needed so far without it).
+
+One more real-run correction (docs/decisions.md D19): `edit_t1` does NOT scope its codemods
+to files named in `work_list`. It runs `ALL_RULES` over every first-party `.py` file under
+`source_root` (via `graph/repo_files.read_py_files`) and uses `work_list` only for ordering
+and the `unit_module` label attached to each `Edit`. `work_list` comes from `relevance.py`,
+whose signal detection targets symbol-level T2 planning (class inheritance, `.dict()`-shaped
+calls, nested `Config`) — it has no reason to also detect every AST shape that can reference
+`pydantic.BaseSettings` (e.g. a bare parameter type annotation, the real case that surfaced
+this), so a file can need a T1 fix without ever appearing in `work_list`. Since T1 rules are
+cheap, deterministic, and gated by the same `run_tests` call regardless, scoping them to the
+narrower planning set bought nothing and silently dropped real fixes.
+
 ---
 
 ## 6. Triage (Phase 4)
@@ -258,6 +331,52 @@ class Strategy:
     retrieval: RetrievalSpec     # what graph query to run for context
     max_attempts: int
 ```
+
+**Implementation update (Phase 4 build, docs/decisions.md D36):** `FailureClass` and
+`Diagnosis` are real, in `types.py` (as `tuple[...]` fields, not bare `list[...]` — matching
+this project's "frozen where possible" convention). `Classifier` lives in
+`triage/protocol.py`, matching how `Sandbox`/`CodemodRule` are each kept in their own
+module's `protocol.py`. `RuleBasedClassifier` (`triage/classifier.py`) is the real, tested
+implementation: `triage/rules.py` classifies by regex against real corpus evidence only
+(`IMPORT_ERROR`, `THIRD_PARTY_PIN`, `VALIDATION_BEHAVIOUR`, `CLASS_DEF_ERROR`,
+`REMOVED_API`); `triage/grouping.py` checks `PREEXISTING` against `baseline.failed` first
+(text-independent — a node that failed before migration is ignored regardless of what its
+current failure text says), then groups the rest by (class, root traceback frame) into one
+`Diagnosis` per real root cause. `SERIALIZATION_DIFF`, `ERROR_MESSAGE_DIFF`, `FLAKY`, and
+the LLM fallback for `UNKNOWN` are NOT built — no real evidence exists yet to design or
+verify them against (`FLAKY` also doesn't fit this Protocol's shape at all: it needs two
+`TestRun`s to compare, not one). `suspect_symbols` is always `()` — no `CodeGraph` wiring
+yet, the same call D25/D28 already made for T2. Wired into `agent/graph.py` (D37): a
+`classify` node runs `RuleBasedClassifier` between `run_tests` and `route()`, populating
+`AgentState.diagnoses` for real. `route()` uses it for one thing — if every diagnosis is
+`PREEXISTING`, finalize/advance without ever calling `repair()`, verified live to actually
+skip a real, would-have-cost-money T2 attempt.
+
+**Implementation update (docs/decisions.md D38):** `repair()`'s target-selection now
+routes through triage instead of the raw `TestRun`. `triage/grouping.py` exposes
+`group_raw_failures(...) -> list[GroupedDiagnosis]` (a new type, NOT a field added to
+`Diagnosis`: `Diagnosis.evidence` is a short ~200-char display/grouping snippet, nowhere
+near enough for `extract_target_file` to find a `path.py:lineno:` frame in, so
+`GroupedDiagnosis` pairs each `Diagnosis` with the full `RawFailure`s it was built from;
+`classify_and_group` — the function `Classifier.classify()` actually calls — is now a
+thin wrapper: `[g.diagnosis for g in group_raw_failures(...)]`, so the Protocol's
+documented `list[Diagnosis]` return shape is untouched). `repair()` groups the current
+iteration's raw failures, filters out `PREEXISTING`/`THIRD_PARTY_PIN`/`FLAKY` (nothing a
+source rewrite can fix for any of the three — I4, D26, and FLAKY's by-definition
+nondeterminism respectively), and picks ONE `GroupedDiagnosis` via a fixed priority order
+(`agent/graph.py`'s `_REPAIR_PRIORITY`: mechanical/high-confidence classes like
+`IMPORT_ERROR` before `VALIDATION_BEHAVIOUR`, which needs real semantic judgment) rather
+than flattening every failure into one prompt regardless of cause. Only that diagnosis's
+own failure text reaches the model. Repair logging (`agent.repair_applied` etc.) now
+carries `cls`/`strategy` — the raw material for phase-4-triage.md's "per-class fix-success
+table" acceptance criterion, not built yet since no repair run has accumulated enough
+volume to make one meaningful.
+
+The `Strategy`/`PathPolicy`/`RetrievalSpec` sketch above is NOT built — `repair()`'s actual
+allowed-edit-surface enforcement is still `apply_patch`'s I1-I3 chokepoint (unconditional,
+not per-strategy), and retrieval is still `agent/repair.py`'s name-based heuristics
+(D25/D28), not a graph query. Building real per-strategy policies is follow-on work once
+`Classifier` output actually drives `repair()`'s behavior beyond the one routing check above.
 
 ---
 
@@ -305,3 +424,21 @@ class RepoResult:
 
 The harness is resumable (skip completed `(repo, config)` cells), parallel over Docker,
 and writes `docs/results/<config>.md` plus a combined `main.md`.
+
+**Implementation update (docs/decisions.md D40):** a minimal slice of this exists early,
+pulled forward into Phase 4 because phase-4-triage.md's own acceptance criteria
+(classifier accuracy, measured pass-rate lift, per-repo cost, per-class fix-rate table)
+can't be satisfied without SOME way to run the loop across corpus repos and score it.
+Not the full sketch above: `eval/metrics.py` has `RepoScore` (a strict subset of
+`RepoResult` — `repo_id`, `pass_rate`, `full_green`, `iterations`, `usd_spent`,
+`wallclock_s`, `final_diagnosis_counts`; no `diff_line_jaccard`, `symbol_precision/recall`,
+or `trace_path` yet) and `score_run()`, the one place this scoring happens. `eval/
+harness.py` has `run_repo()`/`run_corpus()`/`checkout_pre_sha()` — no `EvalConfig`, no
+`retrieval`/`tiers`/`seed` axes, no resumability, no parallelism. The one ablation axis
+that exists is `build_migration_graph(..., use_triage: bool)` — `EvalConfig.triage`'s
+exact early form — because that's the one axis Phase 4 itself needs measured; `retrieval`
+and `tiers` stay unbuilt until Phase 5 has real evidence to design them against, same
+reasoning as `triage/rules.py`'s "only classes with real evidence get a rule" stance.
+`run_repo` also writes real failure text + predicted class to a JSONL side-channel — the
+seed data phase-4-triage.md's "≥100 hand-labelled failures" needs, previously blocked on
+having nowhere to get real failures from at all.

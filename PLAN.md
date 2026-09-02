@@ -179,29 +179,53 @@ project_creation/
 │   │   ├── store.py            # Neo4j CodeGraph — real Cypher, UNVERIFIED (no live Neo4j here)
 │   │   └── queries.py          # Cypher query text used by store.py
 │   ├── sandbox/                # Phase 2
-│   │   ├── image.py            # build + cache docker images per repo@commit
-│   │   ├── runner.py           # execute tests, structured results
-│   │   └── policy.py           # resource caps, network, mounts
-│   ├── codemod/                # Phase 3 T1
-│   │   ├── rules/              # one file per rule, each independently tested
-│   │   └── engine.py
-│   ├── agent/                  # Phase 3 T2/T3
-│   │   ├── graph.py            # LangGraph state machine
-│   │   ├── state.py            # the state object
-│   │   ├── tools.py            # read_file, search_symbol, get_dependents, apply_patch
-│   │   ├── prompts/            # versioned, hashed
-│   │   └── budget.py           # token/cost/iteration/wallclock guards
-│   ├── triage/                 # Phase 4
-│   │   ├── classify.py
-│   │   ├── classes.py          # the taxonomy
-│   │   └── strategies/         # one per class
+│   │   ├── protocol.py         # the Sandbox contract
+│   │   ├── policy.py           # docker CLI args: network, resource caps, overlay mounts — tested
+│   │   ├── image.py            # build + cache docker images per repo@commit — verified against a live daemon
+│   │   ├── results.py          # pytest-json-report -> TestRun — tested against real captured JSON
+│   │   └── runner.py           # DockerSandbox — verified against a live daemon (see decisions.md D13/D14)
+│   ├── codemod/                # Phase 3 T1 — 15 LibCST rules, all tested, kitchen-sink integration test
+│   │   ├── protocol.py         # CodemodRule contract, RuleEdit
+│   │   ├── engine.py           # apply_rules(source, path, rules) — per-rule exception isolation (D22)
+│   │   └── rules/               # one file per rule + shared factories in _common.py
+│   ├── agent/                  # Phase 3 — state machine wired, tested, and run against real Docker + real corpus
+│   │   ├── state.py            # AgentState, Edit
+│   │   ├── budget.py           # BudgetState + NoProgressDetector — tested
+│   │   ├── diff.py             # unified diff parse/generate — tested
+│   │   ├── patch.py            # apply_patch: the I1-I3 invariant chokepoint — tested
+│   │   ├── model_client.py     # ModelClient protocol + FakeModelClient (no API key here to verify a real one)
+│   │   └── graph.py            # LangGraph loop — T1-only verified on madkote/fastapi-plugins: 22/23
+│   │                           #   passing, zero LLM calls (D16-D20); structlog trace events per PLAN.md §7
+│   ├── triage/                 # Phase 4 — rules+grouping+classifier built and tested (D36);
+│   │                           #   FailureClass/Diagnosis live in types.py, not here
+│   │   ├── protocol.py         # Classifier Protocol
+│   │   ├── collect.py          # TestRun -> per-node-id RawFailure, shared with agent/repair.py
+│   │   ├── rules.py            # regex classification — only classes with real corpus evidence
+│   │   ├── grouping.py         # PREEXISTING via baseline, then group by (class, root frame);
+│   │                           #   group_raw_failures() -> GroupedDiagnosis (Diagnosis + full
+│   │                           #   RawFailures), classify_and_group() a thin wrapper over it (D38)
+│   │   └── classifier.py       # RuleBasedClassifier — no LLM fallback yet, no real UNKNOWNs
+│   │                           #   labelled to build/verify one against. Wired into
+│   │                           #   agent/graph.py (D37): a `classify` node populates
+│   │                           #   AgentState.diagnoses; route() skips repair() when every
+│   │                           #   diagnosis is PREEXISTING — verified live against iscc-core
+│   │                           #   to skip a real would-have-cost-money T2 attempt. repair()'s
+│   │                           #   own target-selection now routes through Diagnosis too (D38):
+│   │                           #   picks one GroupedDiagnosis by priority (mechanical fixes
+│   │                           #   before semantic ones), prompts on just that diagnosis's text.
 │   ├── trace/                  # Phase 6
 │   ├── pr/                     # Phase 6
 │   ├── guardrails/             # Phase 7
-│   └── eval/                   # Phase 5
-│       ├── harness.py
-│       ├── metrics.py          # incl. diff similarity
-│       └── configs/            # ablation arm definitions
+│   └── eval/                   # Phase 5 — minimal slice pulled forward into Phase 4 (D40):
+│       │                       #   phase-4-triage.md's own acceptance criteria (accuracy,
+│       │                       #   pass-rate lift, cost, fix-rate table) need a harness to
+│       │                       #   exist at all. No EvalConfig/retrieval/tiers/seed/
+│       │                       #   resumability yet — those wait for Phase 5 real evidence.
+│       ├── harness.py          # run_repo/run_corpus/checkout_pre_sha; also dumps real
+│       │                       #   failure text + predicted class to JSONL for hand-labelling
+│       └── metrics.py          # RepoScore + score_run() — pass_rate/full_green/iterations/
+│                               #   usd_spent/wallclock_s/final_diagnosis_counts; no diff
+│                               #   similarity or symbol precision/recall yet (Phase 5)
 └── tests/                      # YOUR tests, mirroring src/
 ```
 
