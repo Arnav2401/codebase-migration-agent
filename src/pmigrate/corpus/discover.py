@@ -54,6 +54,17 @@ CODE_SEARCH_QUERIES = [
     "from pydantic import ConfigDict language:python",
     "from pydantic import field_validator language:python",
     "from pydantic_settings import BaseSettings language:python",
+    # D34: a repo GENERICALLY mentioning pydantic v2 syntax says nothing about whether it
+    # ever needed a real migration — running validate against the first 46 candidates
+    # this produced yielded exactly one usable repo, twice. These two queries target
+    # repos actively straddling the v1/v2 boundary instead, a stronger and more novel
+    # signal: `pydantic.v1` is v2's OWN compatibility shim for legacy v1-style code — it
+    # cannot appear in a codebase that was never navigating both APIs at once.
+    # `parse_obj(` was removed outright in v2 (kept only as a deprecated shim); current
+    # code still calling it is either mid-migration or was migrated without cleaning
+    # every call site — both are real candidates for validate.py to locate a commit for.
+    "pydantic.v1 language:python",
+    "parse_obj language:python",
 ]
 
 

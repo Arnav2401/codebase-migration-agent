@@ -124,6 +124,26 @@ class SandboxPolicy:
 
 
 @dataclass(frozen=True)
+class ImageRef:
+    """Referenced but not typed in docs/interfaces.md §3 — defined here since Sandbox.build
+    returns one and Sandbox.run_tests consumes it. Carries the cache-key components
+    (docs/phase-2-sandbox.md "Image caching") alongside the tag so a caller can verify a
+    reused image still matches what it thinks it's running, not just trust the tag string.
+
+    Also carries `test_cmd`: interfaces.md's `run_tests(image, workdir_overlay, policy,
+    selection)` signature has no RepoSpec parameter, so the test command has to travel
+    with the image reference rather than being re-supplied per call or stashed as hidden
+    state on the Sandbox instance."""
+
+    tag: str
+    repo_id: str
+    sha: str
+    pydantic: Literal["v1", "v2"]
+    deps_hash: str
+    test_cmd: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TestOutcome:
     node_id: str
     status: Literal["passed", "failed", "error", "skipped", "xfailed"]

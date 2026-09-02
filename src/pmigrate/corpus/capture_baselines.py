@@ -10,10 +10,15 @@ For each RepoSpec in the manifest without a captured baseline:
      own migration is green. If it isn't, the repo is not usable as ground truth.
 
 NOTE: this is a standalone, Phase-0-scoped Docker runner — deliberately not the general
-`Sandbox` protocol from docs/interfaces.md §3, which doesn't exist until Phase 2. When
-Phase 2 builds the real sandbox (with network isolation, read-only mounts, resource caps
-for AGENT-authored code), this script's build-image logic is the thing to fold into it;
-this script only ever runs the repo's OWN test suite, unmodified, so the stakes are lower.
+`Sandbox` protocol from docs/interfaces.md §3 (this script builds at TWO shas — pre_sha
+under v1 and post_sha under v2 for the human-migration sanity check — where `sandbox/image.py`
+always builds at `pre_sha` alone, a real difference worth keeping these as separate
+Dockerfile flows). It DOES reuse `sandbox/image.py`'s install-ecosystem helpers
+(`pydantic_constraint`, `extra_packages`, `sandbox_tools_cmd`, `pydantic_pin_cmd`,
+`BUILD_PLATFORM`) rather than maintaining a second, drifted copy of that logic — found live
+(docs/decisions.md D31) that this script's own template had silently regressed to missing
+BOTH the `uv`-aware install path (D27) and the `pydantic-settings` extra package (D20),
+since neither fix had ever been ported here when they were made in `sandbox/image.py`.
 
 Docker is not installed on this machine as of the last check (docs/phase-0-corpus.md
 "Also in this phase") — this script has not been run end-to-end here. Install Docker
@@ -36,6 +41,14 @@ import structlog
 import typer
 
 from pmigrate.corpus.manifest_io import load_manifest, save_manifest
+from pmigrate.corpus.subprocess_utils import subprocess_error_detail
+from pmigrate.sandbox.image import (
+    extra_packages,
+    pydantic_constraint,
+    pydantic_pin_cmd,
+    sandbox_tools_cmd,
+)
+from pmigrate.sandbox.policy import BUILD_PLATFORM
 from pmigrate.types import BaselineResult, RepoSpec
 
 log = structlog.get_logger()
@@ -53,8 +66,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git build-essen
 WORKDIR /repo
 RUN git clone --quiet {url} . && git checkout --quiet {sha}
 {setup_overrides}
-RUN pip install --no-cache-dir pytest pytest-json-report "pydantic{pydantic_constraint}"
+RUN pip install --no-cache-dir uv
 RUN {install_cmd}
+RUN {sandbox_tools_cmd}
+RUN {pydantic_pin_cmd}
 """
 
 
@@ -64,24 +79,33 @@ class BaselineOutcome:
     drop_reason: str | None
 
 
-def _pydantic_constraint(version: Literal["v1", "v2"]) -> str:
-    return "<2,>=1.9" if version == "v1" else ">=2,<3"
+def _render_dockerfile(repo: RepoSpec, pydantic: Literal["v1", "v2"], sha: str) -> str:
+    # workdir="/repo": this script clones straight into /repo (see DOCKERFILE_TEMPLATE's
+    # own WORKDIR) rather than sandbox/image.py's /repo-base + /repo overlay split — the
+    # shared helpers below default to /repo-base, which is sandbox/image.py's own
+    # convention, not a universal one (docs/decisions.md D31).
+    return DOCKERFILE_TEMPLATE.format(
+        python_version=repo.python_version,
+        url=repo.url,
+        sha=sha,
+        setup_overrides="\n".join(repo.setup_overrides),
+        install_cmd=" ".join(repo.install_cmd),
+        sandbox_tools_cmd=sandbox_tools_cmd(repo.install_cmd, workdir="/repo"),
+        pydantic_pin_cmd=pydantic_pin_cmd(
+            pydantic_constraint(pydantic),
+            extra_packages(pydantic),
+            repo.install_cmd,
+            workdir="/repo",
+        ),
+    )
 
 
 def _build_image(repo: RepoSpec, pydantic: Literal["v1", "v2"], sha: str) -> str:
     tag = f"pmigrate-corpus:{repo.repo_id}-{sha[:8]}-{pydantic}"
     with tempfile.TemporaryDirectory() as tmp:
-        dockerfile = DOCKERFILE_TEMPLATE.format(
-            python_version=repo.python_version,
-            url=repo.url,
-            sha=sha,
-            setup_overrides="\n".join(repo.setup_overrides),
-            install_cmd=" ".join(repo.install_cmd),
-            pydantic_constraint=_pydantic_constraint(pydantic),
-        )
-        (Path(tmp) / "Dockerfile").write_text(dockerfile)
+        (Path(tmp) / "Dockerfile").write_text(_render_dockerfile(repo, pydantic, sha))
         subprocess.run(
-            ["docker", "build", "-t", tag, tmp],
+            ["docker", "build", "--platform", BUILD_PLATFORM, "-t", tag, tmp],
             check=True,
             capture_output=True,
             timeout=BUILD_TIMEOUT_S,
@@ -96,6 +120,8 @@ def _run_pytest_json(image: str, test_cmd: tuple[str, ...]) -> dict[str, Any]:
             "docker",
             "run",
             "--rm",
+            "--platform",
+            BUILD_PLATFORM,
             "-v",
             f"{out_dir}:/out",
             "--memory",
@@ -134,14 +160,15 @@ def capture_baseline(repo: RepoSpec) -> BaselineOutcome:
     try:
         image = _build_image(repo, "v1", repo.pre_sha)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        return BaselineOutcome(None, f"build failed at pre_sha: {e}")
+        return BaselineOutcome(None, f"build failed at pre_sha: {subprocess_error_detail(e)}")
 
     try:
         report_1 = _run_pytest_json(image, repo.test_cmd)
         time.sleep(1)
         report_2 = _run_pytest_json(image, repo.test_cmd)
     except (subprocess.TimeoutExpired, RuntimeError) as e:
-        return BaselineOutcome(None, f"test run failed: {e}")
+        detail = subprocess_error_detail(e) if isinstance(e, subprocess.TimeoutExpired) else str(e)
+        return BaselineOutcome(None, f"test run failed: {detail}")
 
     passed_1, failed_1, skipped_1 = _outcomes_from_report(report_1)
     passed_2, failed_2, _ = _outcomes_from_report(report_2)
@@ -178,7 +205,12 @@ def sanity_check_post_sha(repo: RepoSpec, baseline: BaselineResult) -> tuple[boo
         image = _build_image(repo, "v2", repo.post_sha)
         report = _run_pytest_json(image, repo.test_cmd)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as e:
-        return False, f"post_sha build/test failed: {e}"
+        detail = (
+            subprocess_error_detail(e)
+            if isinstance(e, subprocess.CalledProcessError | subprocess.TimeoutExpired)
+            else str(e)
+        )
+        return False, f"post_sha build/test failed: {detail}"
 
     passed, _, _ = _outcomes_from_report(report)
     still_passing = baseline.passed & passed
@@ -200,6 +232,7 @@ def main(manifest_path: Path = Path("corpus/manifest.json")) -> None:
 
     specs = load_manifest(manifest_path)
     updated: list[RepoSpec] = []
+    captured = 0
     dropped: list[tuple[str, str]] = []
 
     for spec in specs:
@@ -210,6 +243,17 @@ def main(manifest_path: Path = Path("corpus/manifest.json")) -> None:
         log.info("capture_baselines.start", repo_id=spec.repo_id)
         outcome = capture_baseline(spec)
         if outcome.result is None:
+            # NOT omitted from `updated` — corpus/manifest.json is hand-curated and
+            # committed (RepoSpec's own docstring); a repo failing THIS run's baseline
+            # capture (which can fail for transient reasons: a network hiccup, a service
+            # unavailable this run) is not the same thing as a human deciding to drop it
+            # from the corpus. Found live: the first real run of this function, on a
+            # freshly Docker-capable machine, silently reduced a hand-curated 2-repo
+            # manifest to zero entries in one command — validate.py's own main() already
+            # gets this right (`save_manifest(load_manifest(...) + new, ...)`, additive-
+            # only); this brings capture_baselines.py in line with that same pattern
+            # rather than leaving the destructive one as the odd one out.
+            updated.append(spec)
             dropped.append((spec.repo_id, outcome.drop_reason or "unknown"))
             log.warning(
                 "capture_baselines.dropped", repo_id=spec.repo_id, reason=outcome.drop_reason
@@ -218,6 +262,7 @@ def main(manifest_path: Path = Path("corpus/manifest.json")) -> None:
 
         ok, reason = sanity_check_post_sha(spec, outcome.result)
         if not ok:
+            updated.append(spec)
             dropped.append((spec.repo_id, f"post_sha sanity check failed: {reason}"))
             log.warning("capture_baselines.post_sha_failed", repo_id=spec.repo_id, reason=reason)
             continue
@@ -237,15 +282,19 @@ def main(manifest_path: Path = Path("corpus/manifest.json")) -> None:
                 human_diff_stats=spec.human_diff_stats,
             )
         )
+        captured += 1
         log.info(
             "capture_baselines.captured", repo_id=spec.repo_id, passed=len(outcome.result.passed)
         )
 
     save_manifest(updated, manifest_path)
 
-    typer.echo(f"\nBaselines captured: {len(updated)}/{len(specs)}")
+    typer.echo(f"\nBaselines captured: {captured}/{len(specs)}")
     if dropped:
-        typer.echo("Dropped:")
+        typer.echo(
+            "Failed to capture a baseline this run (left in the manifest, unchanged — "
+            "review and remove by hand if the reason is permanent, not transient):"
+        )
         for repo_id, reason in dropped:
             typer.echo(f"  {repo_id}: {reason}")
 

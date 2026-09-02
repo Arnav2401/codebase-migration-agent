@@ -64,13 +64,36 @@ declaring success.
 
 ## Acceptance criteria
 
-- [ ] Every corpus repo builds and runs its suite in the sandbox
-- [ ] Repeated runs on unchanged input give byte-identical pass/fail sets
-- [ ] Network is provably off at run time (a test that asserts a socket connection fails)
-- [ ] A deliberately hostile fixture (infinite loop, fork bomb, 10GB allocation, file write
-      outside the overlay) is contained and reported as a clean failure, not a hang
-- [ ] Image cache hit turns a repeat run into <10s of overhead
-- [ ] Collection errors are surfaced distinctly from test failures
+Verified against a live Docker daemon on 2026-09-01, using `pytest-dev/pytest-mock` (a
+small public repo, standing in for a real corpus entry — Phase 0's actual corpus is still
+empty) and a throwaway hostile-fixture repo. Not yet verified against an actual pydantic
+migration candidate, since Phase 0's corpus doesn't have one yet.
+
+- [x] Every corpus repo builds and runs its suite in the sandbox — `pytest-dev/pytest-mock`
+      built and ran end-to-end, 91 outcomes parsed correctly
+- [x] Repeated runs on unchanged input give byte-identical pass/fail sets — confirmed, two
+      independent runs produced identical (node_id, status) sets
+- [x] Network is provably off at run time — a live test attempting
+      `socket.create_connection(("8.8.8.8", 53))` inside the sandbox raised `OSError` and
+      was reported as a clean pass, not a hang
+- [x] A deliberately hostile fixture is contained and reported as a clean failure, not a
+      hang — verified individually via selective re-run: network blocked (clean pass),
+      write outside the overlay blocked by `--read-only` (clean failure,
+      `OSError: [Errno 30] Read-only file system`), fork bomb capped by `--pids-limit`
+      (clean pass, `BlockingIOError` on the capped fork), 10GB-style allocation OOM-killed
+      by `--memory` (reported as a clean crashed-result, not a hang). The infinite-loop
+      case is contained by the wall-clock timeout at the *container* level (see D13 — this
+      one required a real fix, not just a design that looked right on paper)
+- [x] Image cache hit turns a repeat run into <10s of overhead — 0.03s measured (cold build
+      was 3.7s–165s depending on Docker's own layer cache state)
+- [x] Collection errors are surfaced distinctly from test failures — verified via real
+      captured pytest-json-report JSON (see results.py), exercised live through the same
+      code path during the pytest-mock run
+
+**Also verified, not originally listed as a criterion but load-bearing for Phase 3:** an
+overlay edit changes test outcomes for that one run, and a subsequent run with no overlay
+reverts to the original result — proving the base image is never mutated by a previous
+run's edits.
 
 ## Pitfalls
 

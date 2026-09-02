@@ -7,6 +7,11 @@ PR), where its higher-level object model earns its keep.
 
 Requires a GITHUB_TOKEN with at least public read scopes. Without one you get 60 req/hour
 and both search endpoints become impractical.
+
+Loads `.env` (if present) at import time so `GITHUB_TOKEN` set there is picked up whether
+this runs via `pmigrate corpus discover` or a direct `python -m pmigrate.corpus.discover` —
+neither the CLI nor the scripts otherwise load `.env` themselves, and this is the one place
+the token is actually consumed.
 """
 
 from __future__ import annotations
@@ -18,6 +23,9 @@ from typing import Any, cast
 
 import requests
 import structlog
+from dotenv import load_dotenv
+
+load_dotenv()
 
 log = structlog.get_logger()
 
@@ -50,7 +58,26 @@ class GitHubClient:
 
     def _get(self, url: str, params: dict[str, Any] | None = None) -> requests.Response:
         for attempt in range(6):
-            resp = self.session.get(url, params=params, timeout=30)
+            try:
+                resp = self.session.get(url, params=params, timeout=30)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                # A transport-level failure (no HTTP response at all) is a different
+                # failure mode than the rate-limit/202 handling below, which needs a real
+                # status code to act on. Found live: a multi-page discovery run crashed
+                # outright on a plain `ConnectionResetError` mid-run — transient (the very
+                # next attempt, seconds later, succeeded), but nothing here caught it, so
+                # the whole run was lost rather than just the one request being retried.
+                if attempt == 5:
+                    raise
+                wait = 2**attempt
+                log.warning(
+                    "github_client.connection_error",
+                    error=str(exc),
+                    attempt=attempt,
+                    waiting_s=wait,
+                )
+                time.sleep(wait)
+                continue
             if resp.status_code == 403 and "rate limit" in resp.text.lower():
                 reset = int(resp.headers.get("X-RateLimit-Reset", time.time() + 60))
                 wait = max(1, reset - int(time.time()) + 1)

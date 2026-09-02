@@ -39,6 +39,7 @@ import typer
 
 from pmigrate.corpus.github_client import GitHubClient
 from pmigrate.corpus.manifest_io import load_manifest, save_manifest
+from pmigrate.corpus.subprocess_utils import subprocess_error_detail
 from pmigrate.types import DiffStats, RepoSpec
 
 log = structlog.get_logger()
@@ -77,12 +78,24 @@ def _touches_dependency_file(files: list[dict[str, Any]]) -> bool:
     return any(Path(f["filename"]).name in DEPENDENCY_FILES for f in files)
 
 
+def _touches_source_file(files: list[dict[str, Any]]) -> bool:
+    """A commit that only bumps requirements.txt/pyproject.toml with no .py change isn't
+    a migration — it's a version-pin edit with nothing for the agent to learn from. Found
+    by hand-checking two of the four early "survivors" (skygazer42/Weaver,
+    arn-c0de/Crawllama): both touched only dependency/lockfiles, zero source changes."""
+    return any(
+        f["filename"].endswith(".py") and f["filename"] not in DEPENDENCY_FILES for f in files
+    )
+
+
 def _isolation_ok(files: list[dict[str, Any]]) -> tuple[bool, str]:
     n = len(files)
     if n < MIN_FILES_TOUCHED:
         return False, f"only {n} files touched, expected >= {MIN_FILES_TOUCHED}"
     if n > MAX_FILES_TOUCHED:
         return False, f"{n} files touched, likely bundled with an unrelated feature"
+    if not _touches_source_file(files):
+        return False, "no .py source file touched — likely just a dependency-pin bump"
     additions = sum(f.get("additions", 0) for f in files)
     deletions = sum(f.get("deletions", 0) for f in files)
     total = additions + deletions
@@ -97,13 +110,11 @@ def _isolation_ok(files: list[dict[str, Any]]) -> tuple[bool, str]:
     return True, ""
 
 
-def _find_migration_commit_by_clone(
-    client: GitHubClient, full_name: str, repo_id: str
-) -> str | None:
-    """For code-search-sourced candidates with no known commit: shallow-clone and grep git
-    log for a dependency-file change that bumps the pydantic constraint across the v1/v2
-    boundary. Heuristic, not exhaustive — expect to hand-fix a few of these during curation.
-    """
+def _clone_shallow(client: GitHubClient, full_name: str, repo_id: str) -> Path | None:
+    """Cloned once per candidate now, not just for code-search-sourced ones with no known
+    commit — `_pre_sha_is_clean_v1` below needs a real checkout for every candidate
+    regardless of how its migration commit was found (docs/decisions.md D32: the gap that
+    let `plugboard` through wasn't in commit-location at all)."""
     checkout = CHECKOUTS_DIR / repo_id
     if checkout.exists():
         shutil.rmtree(checkout)
@@ -123,40 +134,125 @@ def _find_migration_commit_by_clone(
             timeout=180,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        log.warning("validate.clone_failed", repo_id=repo_id, error=str(e))
+        log.warning("validate.clone_failed", repo_id=repo_id, error=subprocess_error_detail(e))
         return None
+    return checkout
 
+
+# Tried in order of specificity, not combined with AND — docs/decisions.md D33: the
+# original single query (commit message mentions "pydantic v2" AND the diff touches a
+# dependency file with a pydantic-related change) dropped 36 of 46 real candidates at
+# this stage. Real migrations don't reliably phrase their commit message a specific way,
+# and a repo may have bumped its dependency file in an earlier, separate commit from the
+# one that actually rewrote the source. The pickaxe strategies (`-S`) are the most
+# robust: they find the commit that changed whether a v2-only symbol's occurrence count
+# in the tree, which doesn't depend on commit message wording at all.
+_COMMIT_SEARCH_STRATEGIES: tuple[tuple[str, ...], ...] = (
+    (
+        "--all",
+        "--format=%H",
+        "-i",
+        "--grep=pydantic.*v\\?2",
+        "-G",
+        "pydantic",
+        "--",
+        *DEPENDENCY_FILES,
+    ),
+    ("--all", "--format=%H", "-i", "--grep=pydantic.*v\\?2"),
+    ("--all", "--format=%H", "-S", "field_validator", "--", "*.py"),
+    ("--all", "--format=%H", "-S", "ConfigDict(", "--", "*.py"),
+    ("--all", "--format=%H", "-S", "model_dump(", "--", "*.py"),
+)
+
+
+def _find_migration_commit(checkout: Path, repo_id: str) -> str | None:
+    """For candidates with no known commit: search git log with several distinct
+    strategies, in order, stopping at the first one that finds anything. Heuristic, not
+    exhaustive — expect to hand-fix a few of these during curation."""
+    for args in _COMMIT_SEARCH_STRATEGIES:
+        try:
+            log_out = subprocess.run(
+                ["git", "-C", str(checkout), "log", *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            log.warning(
+                "validate.log_search_failed", repo_id=repo_id, error=subprocess_error_detail(e)
+            )
+            continue
+        if log_out:
+            # Most recent matching commit is usually the actual migration (later commits
+            # tend to be follow-up fixes) — take the first line, but this is exactly the
+            # kind of hit that deserves a human glance during curation rather than blind
+            # trust. (--format=%H, not --oneline: --oneline abbreviates to a 7-char hash,
+            # which silently produced a truncated post_sha in the manifest until that was
+            # caught by inspection.)
+            return log_out.splitlines()[0]
+    return None
+
+
+# A repo-wide grep at pre_sha, not a diff check — docs/decisions.md D32: `plugboard`'s
+# migration commit was real and correctly isolated, but its `pre_sha` was NOT a genuine
+# pre-migration state — a workspace sub-package (`plugboard-schemas`) had already
+# independently moved to pydantic v2 syntax before the commit Phase 0 identified as "the"
+# migration. A per-commit diff check can never catch this, because the offending code was
+# never touched by that commit at all; it requires looking at the whole tree.
+_V2_ONLY_SYMBOLS = (
+    "field_validator",
+    "model_validator",
+    r"ConfigDict\(",
+    r"model_dump\(",
+    "model_config =",
+    "model_config:",
+)
+
+
+def _pre_sha_is_clean_v1(checkout: Path, pre_sha: str, repo_id: str) -> tuple[bool, str]:
     try:
-        log_out = subprocess.run(
+        subprocess.run(
+            ["git", "-C", str(checkout), "checkout", "--quiet", pre_sha],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        result = subprocess.run(
             [
                 "git",
                 "-C",
                 str(checkout),
-                "log",
-                "--all",
-                "--oneline",
-                "-i",
-                "--grep=pydantic.*v\\?2",
-                "-G",
-                "pydantic",
+                "grep",
+                "-l",
+                "-E",
+                "|".join(_V2_ONLY_SYMBOLS),
                 "--",
-                *DEPENDENCY_FILES,
+                "*.py",
             ],
-            check=True,
             capture_output=True,
             text=True,
             timeout=60,
-        ).stdout.strip()
+        )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        log.warning("validate.log_search_failed", repo_id=repo_id, error=str(e))
-        return None
+        detail = subprocess_error_detail(e)
+        log.warning("validate.pre_sha_check_failed", repo_id=repo_id, error=detail)
+        return False, f"could not verify pre_sha is clean: {detail}"  # fail closed, not open
 
-    if not log_out:
-        return None
-    # Most recent matching commit is usually the actual migration (later commits tend to
-    # be follow-up fixes) — take the first line, but this is exactly the kind of hit that
-    # deserves a human glance during curation rather than blind trust.
-    return log_out.splitlines()[0].split()[0]
+    # `git grep` uses its exit code for three DIFFERENT meanings: 0 = matched, 1 = no
+    # match (a normal, expected outcome — NOT an error), >=2 = a real error (bad pattern,
+    # bad pathspec, ...). Found live: an earlier version of `_V2_ONLY_SYMBOLS` had
+    # unescaped `(` characters, which made the `-E` pattern invalid ERE syntax — git
+    # exited 128 with "empty (sub)expression," and treating "returncode != 0" as "no
+    # match" made this fail OPEN (silently reporting every candidate as clean) instead of
+    # failing closed the way this function's own docstring/comment already claimed to.
+    if result.returncode not in (0, 1):
+        log.warning("validate.pre_sha_check_failed", repo_id=repo_id, error=result.stderr.strip())
+        return False, f"pre_sha check itself failed: {result.stderr.strip()}"
+    if result.returncode == 0 and result.stdout.strip():
+        hit = result.stdout.strip().splitlines()[0]
+        return False, f"pre_sha already contains pydantic v2-only syntax (e.g. {hit})"
+    return True, ""
 
 
 def validate_candidate(
@@ -165,9 +261,14 @@ def validate_candidate(
     repo_id = candidate["repo_id"]
     full_name = candidate["full_name"]
 
+    checkout = _clone_shallow(client, full_name, repo_id)
+    if checkout is None:
+        _log_drop(reasons, repo_id, "locate_commit", "could not clone repo")
+        return None
+
     sha = candidate.get("candidate_sha")
     if sha is None:
-        sha = _find_migration_commit_by_clone(client, full_name, repo_id)
+        sha = _find_migration_commit(checkout, repo_id)
         if sha is None:
             _log_drop(reasons, repo_id, "locate_commit", "could not locate a migration commit")
             return None
@@ -186,6 +287,11 @@ def validate_candidate(
     ok, reason = _isolation_ok(files)
     if not ok:
         _log_drop(reasons, repo_id, "isolation", reason)
+        return None
+
+    clean, reason = _pre_sha_is_clean_v1(checkout, pre_sha, repo_id)
+    if not clean:
+        _log_drop(reasons, repo_id, "pre_sha_not_clean", reason)
         return None
 
     repo_meta = client.get_repo(full_name)

@@ -22,6 +22,7 @@ dependencies = [
     "structlog>=24.1",
     "typer>=0.12",
     "tenacity>=8.2",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +58,9 @@ exclude = ["tests/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# TestOutcome/TestRun (types.py) are plain dataclasses that happen to start with "Test" —
+# pytest's default class-collection heuristic (`Test*`) flags them and warns that they
+# can't be collected (they have __init__). Every test in this project is a bare function
+# (`def test_...`), never a class, so disabling class-based collection entirely is exactly
+# right here, not just a warning suppression.
+python_classes = []
