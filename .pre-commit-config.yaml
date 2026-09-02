@@ -1,0 +1,26 @@
+# Local hooks only -- run this repo's own already-installed tools (ruff/mypy from .venv)
+# instead of pre-commit's usual pattern of fetching hook environments from GitHub. Avoids
+# a network dependency on every commit and keeps versions in lockstep with pyproject.toml's
+# dev deps instead of a second, separately-pinned set of hook-repo revisions. Mirrors the
+# Makefile's `lint`/`typecheck` targets exactly.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: .venv/bin/ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format --check
+        entry: .venv/bin/ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: mypy
+        name: mypy --strict (src/pmigrate only)
+        entry: .venv/bin/mypy src/pmigrate
+        language: system
+        pass_filenames: false
+        files: ^src/pmigrate/.*\.py$
