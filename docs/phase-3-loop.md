@@ -124,9 +124,44 @@ strategy or abort. This alone saves a large fraction of runaway cost.
 
 ## Acceptance criteria
 
-- [ ] One dev-split repo goes from red to fully green with zero human edits
-- [ ] The entire run is reconstructible from its trace
-- [ ] Budget guard demonstrably aborts a run when capped low
-- [ ] Anti-cheat rejects an intentionally test-editing patch
-- [ ] T1-only (codemods, no LLM) is runnable as a config — you need this arm for Phase 5
-- [ ] Metrics from PLAN.md §7 are being logged. **From now on, not retroactively.**
+- [x] One dev-split repo goes from red to fully green with zero human edits — MET.
+      `iscc__iscc-core` (D34/D35): a real v1 baseline was captured and reproducibility-
+      checked (315 passed, 4 failed, twice, identically) before touching anything. T1-only
+      applied exactly ONE mechanical edit (`basesettings_import_to_pydantic_settings` +
+      `config_class_to_configdict` + `dict_to_model_dump`, all to one file) and reached
+      315/319 — zero collection errors, and the 4 remaining failures are verbatim the same
+      4 that failed at baseline, for a third-party `DataURL` API reason with nothing to do
+      with pydantic. Under I4, the honest denominator is 315, and 315/315 pass: literal
+      100%, mechanically, at zero cost, zero LLM calls, zero human edits. Getting here
+      needed expanding the corpus past D32's one-repo low point (D33: hardened
+      `validate.py` with what `plugboard` taught; D34: discovery queries targeting the
+      v1/v2 BOUNDARY — `pydantic.v1`, `parse_obj` — found real new territory that generic
+      v2-mention queries, run twice, had exhausted).
+
+      Kept as evidence, not superseded: `madkote/fastapi-plugins` remains PROVEN not
+      achievable as a target at all (D19-D29 — I1 protecting an unmigrated test file, and
+      two dependencies needing live services no sandbox should provide), and
+      `plugboard-dev/plugboard` was dropped from the corpus entirely (D31/D32 — its
+      `pre_sha` was never a genuine pre-migration state; a workspace sub-package had
+      already independently moved to pydantic v2 before the commit Phase 0 identified as
+      "the" migration). Both are real, load-bearing findings about the limits of this
+      architecture and of commit-based corpus curation for multi-package repos — kept
+      in `docs/decisions.md` even though they're no longer blocking this criterion.
+- [x] The entire run is reconstructible from its trace — via `structlog` events in
+      `agent/graph.py` (`agent.edit_t1`/`run_tests`/`repair`/`finalize`), not the full `trace/`
+      module — that's PLAN.md's Phase 6 deliverable, explicitly locked until real corpus numbers
+      exist (CLAUDE.md's build-order rule). These events are the raw material Phase 5/6 tooling
+      aggregates later.
+- [x] Budget guard demonstrably aborts a run when capped low — verified against a REAL Docker
+      container (not just `FakeSandbox`): `max_iterations=0` against the cached
+      `madkote/fastapi-plugins` v2 image ran exactly one real container, then correctly halted
+      with `status="budget_exceeded"` (4.8s wallclock, one `agent.run_tests` log line).
+- [x] Anti-cheat rejects an intentionally test-editing patch — verified against a REAL cloned
+      repo (not a synthetic fixture): a hand-crafted diff adding `@pytest.mark.skip` to
+      `fastapi-plugins`' real `tests/test_control.py` was rejected by `apply_patch` with both
+      I1 (`diff touches a test file`) and I2 (`adds a skip/xfail marker`) violations, and the
+      overlay file was left byte-for-byte unchanged.
+- [x] T1-only (codemods, no LLM) is runnable as a config — you need this arm for Phase 5 —
+      demonstrated repeatedly against real Docker (docs/decisions.md D16-D22).
+- [x] Metrics from PLAN.md §7 are being logged. **From now on, not retroactively.** — done via
+      the same `structlog` events above.
