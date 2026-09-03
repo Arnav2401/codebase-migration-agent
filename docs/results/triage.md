@@ -2,13 +2,20 @@
 
 **Run date:** 2026-09-03. **Model backend:** Groq `openai/gpt-oss-120b` (docs/decisions.md
 D48/D49 — Gemini's free tier turned out to trickle-refill rather than reset daily,
-impractical for a real run; Groq's key measured 1000 req/min of headroom). **Corpus:** 5
-repos, `corpus/manifest.json`, dev split. **Budget:** `usd_cap=1.0`, `max_iterations=8`
-per repo. **Code state:** every fix from D40 through D49 applied — this is the first run
-where the harness, sandbox overlay, and scoring were all simultaneously correct.
+impractical for a real run; Groq's key measured 1000 req/min of headroom). **Corpus:** 7
+repos, `corpus/manifest.json`, dev split — 5 original plus 2 (`cmudig__draco2`,
+`okfn__opendataeditor`) added to the manifest mid-session; this is the first writeup to
+cover all 7. **Budget:** `usd_cap=1.0`, `max_iterations=8` per repo (per-repo caps; some
+repos ran one iteration over `max_iterations` where the graph's own loop condition allows
+one more classify pass after the last repair). **Code state:** every fix from D40 through
+D50 applied, including D50's fix to `repair()`'s target-selection fallback (see below) —
+this is the first run where the harness, sandbox overlay, scoring, and repair-target
+fallback were all simultaneously correct.
 
-This is a small corpus (5 repos) run once per arm — real numbers, not a statistically
-robust study. Treat the comparison as a first, honest signal, not a final verdict.
+This is a small corpus (7 repos) run once per arm — real numbers, not a statistically
+robust study. Treat the comparison as a first, honest signal, not a final verdict. One
+cell is missing: `okfn__opendataeditor`'s `use_triage=False` run hung (see below) and was
+killed rather than left to block the rest of the corpus.
 
 ## Headline comparison: `use_triage=True` vs `use_triage=False`
 
@@ -16,74 +23,119 @@ robust study. Treat the comparison as a first, honest signal, not a final verdic
 `repair()` falls back to the pre-D38 shape — every raw failure dumped into one prompt,
 no per-class routing, no PREEXISTING skip in `route()`.
 
-| Repo | pass_rate (ON) | pass_rate (OFF) | usd (ON) | usd (OFF) | What happened |
-|---|---|---|---|---|---|
-| `madkote__fastapi-plugins` | 0.37 | **0.52** | $0.0000 | $0.0023 | OFF did better — ON's diagnosis-routed target had a traceback shape `extract_target_file` couldn't match, so repair was never attempted at all (`repair_no_target`); OFF's combined-failure prompt found a fixable target elsewhere |
-| `SupImDos__pydantic-argparse` | 0.00 | 0.00 | $0.0060 | $0.0081 | Genuinely hard case either way — `pydantic.fields.ModelField` has no 1:1 v2 equivalent. 8-9 real repair attempts per arm, all honest failures, not a harness bug (confirmed via D46's canary test) |
-| `Aiven-Open__rohmu` | 0.87 | 0.86 | $0.0040 | $0.0026 | Nearly identical — both arms found and applied the same real fix (`@root_validator` → `@model_validator` shape, `CLASS_DEF_ERROR`) |
-| `iscc__iscc-core` | **1.00** | 1.00 | $0.0000 | $0.0000 | No repair needed either way — T1 alone resolves it (confirmed identically across every run this session, with and without a model client at all) |
-| `eyurtsev__kor` | **0.96** | 0.51 | $0.0012 | $0.0000 | ON did much better — OFF hit `413 Payload Too Large` (all diagnoses' raw text combined exceeded Groq's request size limit) and never got to attempt repair at all |
+| Repo | pass_rate (ON) | pass_rate (OFF) | usd (ON) | usd (OFF) | iters (ON/OFF) | What happened |
+|---|---|---|---|---|---|---|
+| `madkote__fastapi-plugins` | 0.5185 | 0.5185 | $0.0018 | $0.0023 | 3 / 3 | **Identical.** This was the one repo where ON used to lose (0.37 vs 0.52) — D50 fixed the underlying bug; see below |
+| `SupImDos__pydantic-argparse` | 0.00 | 0.00 | $0.0081 | $0.0074 | 9 / 9 | Genuinely hard case either way — `pydantic.fields.ModelField` has no 1:1 v2 equivalent. 8 real repair attempts per arm, all honest failures |
+| `Aiven-Open__rohmu` | 0.8923 | 0.8615 | $0.0052 | $0.0021 | 4 / 2 | ON slightly ahead this run. ON hit a `413` on its 4th attempt after 3 real fixes; OFF hit its `413` earlier (2nd attempt), so it banked fewer fixes |
+| `iscc__iscc-core` | 1.00 | 1.00 | $0.0000 | $0.0024 | 1 / 2 | No repair needed on ON; OFF made one unnecessary repair attempt (already green) that didn't change the outcome |
+| `eyurtsev__kor` | 0.9551 | 0.5056 | $0.0014 | $0.0013 | 2 / 2 | ON's clearest win, reproduced cleanly from the earlier run — OFF's combined-failure prompt fixes less per call |
+| `cmudig__draco2` *(new)* | 0.8777 | 0.8777 | $0.0010 | $0.0000 | 2 / 1 | **Same score, different reasons** — see below |
+| `okfn__opendataeditor` *(new)* | 0.0217 | **incomplete** | $0.0000 | — | 1 / killed | ON completed (near-total failure — see below). OFF hung; killed after ~14 min of no progress rather than block the rest of the corpus |
 
-**Average pass rate: 0.640 (ON) vs 0.578 (OFF).** Total cost across both arms: **$0.0237**.
+**Average pass rate, original 5 repos only (directly comparable to the previous writeup):
+0.6672 (ON) vs 0.5771 (OFF)** — up from 0.640/0.578 pre-D50. **Average pass rate, all 7
+repos, ON arm only (OFF incomplete): 0.6743.**
 
-## Why triage wins, in the two cases where it clearly did
+## The `madkote` regression was a real bug — now fixed (D50)
 
-Both `kor`'s win and the `413` failures share one root cause: `use_triage=False` builds
-its prompt from `collect_failure_texts()`, which concatenates *every* raw failure's full
-text into a single prompt — for a repo with several genuinely different problems (or many
-copies of the same problem across files), that blob can be large enough to hit a request
-size limit before the model ever sees it. `use_triage=True` picks exactly one
-`GroupedDiagnosis` (`agent/graph.py`'s `_REPAIR_PRIORITY`) and sends only *that*
-diagnosis's raw failures — smaller by construction, and focused on one fixable problem
-instead of asking the model to somehow address everything at once. This is the argument
-`docs/phase-4-triage.md` makes for why triage should matter, now backed by a real number
-instead of an assertion.
+The previous version of this doc reported ON *losing* to OFF here (0.37 vs 0.52) and
+described it as "a genuine edge case, not a triage design flaw." That framing undersold
+it: it was a real bug in `repair()`'s target-selection fallback, `agent/graph.py`. The old
+`_select_repair_target` picked only the single top-priority `GroupedDiagnosis` and gave up
+entirely — `agent.repair_no_target`, no model call at all — if `extract_target_file` found
+no target for it, even when a lower-priority diagnosis had a perfectly good target
+available. `docs/decisions.md` D50 replaces this with
+`_repair_candidates_in_priority_order`, which loops through candidates in priority order
+and only gives up once none of them yield a target. This run confirms the fix: ON now
+matches OFF exactly (0.5185 both arms) — one `validation_behaviour` repair applied to
+`fastapi_plugins/logger.py`, then a legitimate `repair_no_target` on the next diagnosis
+(which really has no fixable target), same outcome either way.
 
-## Where it didn't win: `madkote__fastapi-plugins`
+## Why triage still wins: `eyurtsev__kor`
 
-Worth reporting honestly rather than only citing the wins. The ON arm's diagnosis for
-this repo happened to point at a failure whose traceback shape `extract_target_file`
-(`agent/repair.py`) doesn't handle — a real, narrow gap in that heuristic, not a triage
-design flaw — so `repair()` gave up before ever calling the model. The OFF arm's combined
-prompt, containing the SAME underlying failures plus others, happened to give the model
-enough surrounding context to find and fix a different, real target. This is a genuine
-edge case, not evidence that per-diagnosis routing is generally worse — it's a concrete,
-reproducible bug report against `extract_target_file`'s traceback-frame matching, worth
-fixing on its own.
+This is the cleanest reproduction of the core argument. `use_triage=False` builds its
+prompt from `collect_failure_texts()`, concatenating *every* raw failure's full text into
+one prompt. `use_triage=True` picks exactly one `GroupedDiagnosis`
+(`agent/graph.py`'s `_REPAIR_PRIORITY`) and sends only that diagnosis's raw failures —
+smaller by construction, focused on one fixable problem. On `kor`, ON's single targeted
+repair to `kor/extraction/parser.py` unblocks 40 additional tests (0.51 → 0.96); OFF's
+combined prompt fixes something too, but less effectively (0.51 final). This is the
+argument `docs/phase-4-triage.md` makes for why triage should matter, backed by a real,
+reproduced number.
 
-## Preliminary per-class attempt tally (`use_triage=True` arm only)
+## `cmudig__draco2`: same score, different reasons
 
-Not the full fix-success table `docs/phase-4-triage.md` asks for — that needs `AgentState`
-to retain repair-attempt/run history it doesn't have yet (flagged as future work in D40).
-This is a hand-reconstruction from this run's own structlog events (`agent.repair_applied`
-now carries `cls`/`strategy` per D38 specifically so this becomes possible), with a tiny
-sample size — read it as "what happened in these 12 real attempts," not a rate.
+Worth reporting because the identical 0.8777 in both arms is a coincidence, not evidence
+the two approaches are equivalent here. In the **ON** arm, the chosen diagnosis's repair
+call returned a rewrite for a file the model was never shown (`agent.repair_unknown_path`)
+— a real hallucination, safely discarded by the same apply_patch chokepoint that enforces
+I1-I3 (never trust an unshown path enough to write to it). No edit was applied, and the
+2nd iteration confirmed nothing changed. In the **OFF** arm, the combined-failure prompt
+was large enough to hit Groq's `413 Payload Too Large` before the model ever saw it — the
+same failure mode documented for `kor` and `rohmu` below, just landing on a repo where it
+happened to produce the same final score as ON's unrelated failure. Two different bugs,
+one coincidental tie.
+
+## `okfn__opendataeditor`: hardest case in the corpus, and an incomplete run
+
+The **ON** arm completed: pass_rate 0.0217 (2/92 tests passing after T1, one repair
+attempt that hit a `413 Payload Too Large` and made no further progress). This looks like
+a genuinely hard repo — T1's mechanical rewrite alone leaves it almost entirely broken —
+rather than a harness bug, but with only one data point it's not yet possible to say
+whether triage or the model backend could do meaningfully better with more budget.
+
+The **OFF** arm did not complete. It got through T1 and the first test run (also 2/92),
+then hung after the classify step with no log output and no CPU progress for over 10
+minutes — a single stalled HTTPS connection to Groq's API sat in `CLOSE_WAIT`, well past
+the point where `GroqModelClient`'s own `timeout=120` + 3 retries (docs/decisions.md D49)
+should have surfaced an error either way. The harness's `wallclock_cap_s=900` budget check
+(`agent/budget.py`) is evaluated between graph nodes, not as a hard interrupt on a blocking
+call, so it couldn't rescue a call that never returned. The process was killed manually
+rather than left to block the rest of the corpus. **This cell is a known gap, not a zero**
+— treat `okfn__opendataeditor`'s OFF-arm score as unmeasured, not as evidence either way.
+
+## Preliminary per-class attempt tally (`use_triage=True` arm, all 7 repos)
+
+Same caveat as before: this is a hand-reconstruction from structlog events with a small
+sample size — read it as "what happened in these attempts," not a rate.
 
 | Class | Attempts | Outcome |
 |---|---|---|
-| `class_def_error` | 1 | Fixed — `rohmu` went from fully blocked (0/195) to 170/195 in one call |
-| `unknown` | 8 | 1 fixed (`kor`'s `parser.py`, collection unblocked + 40 more tests passing), 7 not fixed (`pydantic-argparse`'s hard case, 6 attempts + `rohmu`'s second-pass attempt with an inconclusive result — the narrow re-test covered different node_ids than the ones this attempt could have affected) |
+| `unknown` | 10 | 1 fixed (`kor`'s `parser.py`, +40 tests passing); 7 not fixed (`pydantic-argparse`'s hard case); 1 applied with inconclusive effect (`rohmu`'s `statsd.py`, next repair attempt hit `413` before an isolated re-test could attribute a delta); 1 failed outright (`opendataeditor`, `413` before a class could even be pinned down) |
+| `class_def_error` | 2 | 1 fixed (`rohmu`, 0/195 → 170/195 in one call); 1 discarded (`draco2` — model named a file never shown to it, rejected by the I1-I3 guard, not a fix) |
+| `validation_behaviour` | 2 | 1 fixed (`madkote`'s `logger.py`, the D50-verified repair); 1 applied with inconclusive effect (`rohmu`'s `config.py`, second pass — narrow re-test didn't cover a node_id this specific edit could have changed) |
 | `import_error` | 1 | Not fixed (`pydantic-argparse`) |
-| `validation_behaviour` | 1 | Inconclusive — applied against `rohmu`'s already-fixed `config.py`; the next test run's narrow selection didn't cover any node_id this specific edit could have changed |
 
 ## What's NOT here yet
 
+- **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — the run
+  hung and was killed. Worth a targeted rerun of just this one cell before drawing any
+  conclusion about triage's effect on this repo.
 - **Classifier accuracy on a hand-labelled set.** `docs/results/triage_failures_dev.jsonl`
-  now has 78 real residual failures with predicted classes and full traceback text from
-  this run alone (overwritten each run, not yet accumulated) — real seed data, but still
-  short of `phase-4-triage.md`'s ≥100 target, and nothing has been hand-labelled against
-  it yet.
+  has real residual failures with predicted classes and full traceback text, but nothing
+  has been hand-labelled against it yet, and it's overwritten each run rather than
+  accumulated.
 - **A full, statistically meaningful per-class fix-success table.** Needs both a bigger
-  corpus (5 repos gives too few samples per class) and the `AgentState` repair-attempt-
-  history extension flagged in D40.
-- **Multiple seeds/reruns for variance.** This is one run per arm; `Aiven-Open__rohmu`'s
-  87% vs 86% is close enough that a second run could plausibly flip which arm "wins" on
-  that repo specifically — the `kor` and `madkote` results are large enough deltas to be
-  more likely durable, but that's an assumption, not something re-verified here.
+  corpus (7 repos still gives too few samples per class) and the `AgentState`
+  repair-attempt-history extension flagged in D40 — right now this is reconstructed by
+  hand from structlog events, which doesn't scale and can't attribute inconclusive cases
+  cleanly (see `rohmu`'s two entries above).
+- **Multiple seeds/reruns for variance.** One run per arm. `rohmu`'s ON/OFF gap moved
+  slightly between this run and the previous one (0.87/0.86 → 0.89/0.86) purely from which
+  iteration happened to hit the `413` limit — a reminder that single-run deltas on this
+  corpus size can shift run to run even with no code changes.
+- **The `413 Payload Too Large` limitation itself.** It hit three separate repos this run
+  (`rohmu` ON, `rohmu` OFF, `draco2` OFF, `opendataeditor` OFF) and is now the single most
+  common reason a repair attempt fails outright, ahead of any genuine model mistake. Worth
+  addressing directly (e.g. truncating/summarizing large failure batches) before drawing
+  further conclusions from repos that hit it.
 
 ## Raw data
 
-- Per-repo scores (JSON): `corpus_run_groq_results.json` (scratch — not committed;
-  regenerate via `scratchpad/run_corpus_groq.py` if needed)
+- Full run logs with every `agent.*` event: session-local, not retained past this run —
+  this writeup was reconstructed from the live log tail during monitoring, since the
+  script's own `corpus_run_groq_results.json` was never written for this run (it's written
+  once at full completion, which didn't happen because the `opendataeditor` OFF cell was
+  killed mid-run).
 - Residual failures with full text: `docs/results/triage_failures_dev.jsonl`
-- Full run logs with every `agent.*` event: session-local, not retained past this run
