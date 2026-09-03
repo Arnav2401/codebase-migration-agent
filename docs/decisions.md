@@ -2461,6 +2461,64 @@ both sides everywhere this metric would actually get called."
 
 ---
 
+## D59 — Wire diff-similarity into the harness: `git show`, not a second checkout; micro-average
+
+**Alternatives:** check out `post_sha` into a second full working tree alongside
+`source_root`/`overlay_root`; recompute the human's touched-files list via a fresh
+`git diff --name-only pre_sha post_sha`; macro-average per-file rates into the repo-level
+number; score only the files the AGENT touched, ignoring files the human's real fix
+touched that the agent never tried.
+
+**Why:** `checkout_pre_sha` already does a full (non-shallow) `git clone`, so `post_sha`'s
+blobs are already present in `source_root`'s local history — `git show {post_sha}:{path}`
+reads one file's content at that commit without materializing a second working tree, cheap
+and sufficient since only specific files' content is needed, not a full tree. Recomputing
+the human's touched-files list was rejected once `RepoSpec.human_diff_stats.changed_paths`
+turned out to already exist for this exact purpose — `corpus/validate.py`'s own docstring
+calls it "used as ground truth in Phase 5" — so a fresh `git diff` would be needlessly
+recomputing already-validated corpus-curation-time data. Scoring only the agent's own
+touched files was rejected as the more consequential decision: `symbol_recall` exists
+specifically to answer "of what the human changed, what fraction did the agent also
+change," and a file the human fixed that the agent never even attempted is exactly the
+case that question needs to catch — silently excluding it would make recall structurally
+unable to ever report anything below 1.0 for files outside the agent's own edit set,
+regardless of how much it missed. Macro-averaging was rejected for the same reason D58's
+`repo_diff_similarity` was designed with micro-averaging in mind: it would let a
+one-symbol file count the same as a thirty-symbol file and need special-casing for any
+file with zero symbols on one side.
+
+**Fixed by** `eval/harness.py`'s `compute_diff_similarity`: unions
+`human_diff_stats.changed_paths` (filtered to `.py`) with the agent's own touched files
+(from `final_state["edits"]`), reads `before` from the pristine `source_root`, `agent_after`
+from the overlay (falling back to `before` for a file the agent never wrote there), and
+`human_after` via `git show`, then hands the per-file tuples to `repo_diff_similarity` for
+pooling. `run_repo` merges the result into `score_run`'s already-produced `RepoResult` via
+`dataclasses.replace` — keeping `score_run` itself I/O-free, since this new git-based
+fetching belongs in `run_repo`, which already does real I/O (`checkout_pre_sha`,
+`sandbox.build`), not in the pure scoring function. Returns `None` (not a fabricated score)
+when there's no `human_diff_stats` at all or neither side touched a Python file.
+
+Caught live while writing this: an early version of the test suite for this had its OWN
+git fixtures leave the working tree at `post_sha` after creating both commits (a plain
+sequential `git commit`, `git commit` never checks anything back out) — silently reading
+`post_sha`'s content as `before` instead of `pre_sha`'s, since `compute_diff_similarity`
+reads `before` straight off `source_root`'s disk rather than via `git show`. The
+production code was correct throughout; the test fixture didn't match
+`checkout_pre_sha`'s real invariant (the working tree stays AT `pre_sha` for the whole
+run) until it explicitly checked back out to `pre_sha` after building both commits.
+
+**Interview:** "The recall question only means something if a file the human fixed but
+the agent never touched can actually show up as a miss — so the file-selection logic
+mattered more here than the arithmetic. I also want to be upfront that my first version
+of the TEST fixtures had a real bug, not the code: I built a two-commit git repo but never
+checked back out to the first commit, so the harness was reading the second commit's
+content as if it were the baseline. Two tests failed in a way that looked at first like a
+bug in `compute_diff_similarity` — tracing it down to the fixture, not the function under
+test, is exactly the kind of check that's easy to skip when a test failure 'looks like' it
+must be the new code's fault."
+
+---
+
 ## Template
 
 ```

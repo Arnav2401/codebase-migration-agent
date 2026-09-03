@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import difflib
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import structlog
@@ -70,6 +71,14 @@ def _changed_line_content(before: str, after: str) -> frozenset[str]:
         lines.update(before_lines[i1:i2])
         lines.update(after_lines[j1:j2])
     return frozenset(lines)
+
+
+def _changed_line_content_scoped(path: str, before: str, after: str) -> frozenset[tuple[str, str]]:
+    """Same as `_changed_line_content`, but each line is paired with `path` -- pooling
+    across multiple files (`repo_diff_similarity` below) can't otherwise tell apart two
+    different files that both happen to change a line reading the same text (e.g.
+    `return None`)."""
+    return frozenset((path, line) for line in _changed_line_content(before, after))
 
 
 def diff_line_jaccard(before: str, agent_after: str, human_after: str) -> float:
@@ -188,3 +197,63 @@ def symbol_diff_precision_recall(
     precision = len(intersection) / len(agent_symbols) if agent_symbols else 0.0
     recall = len(intersection) / len(human_symbols) if human_symbols else 0.0
     return SymbolDiffResult(precision, recall, agent_symbols, human_symbols)
+
+
+@dataclass(frozen=True)
+class RepoDiffSimilarity:
+    line_jaccard: float
+    symbol_precision: float
+    symbol_recall: float
+
+
+def repo_diff_similarity(
+    files: Sequence[tuple[str, str, str, str]],
+) -> RepoDiffSimilarity:
+    """Repo-level diff similarity, POOLING across every file before computing a single
+    ratio (micro-averaging) rather than averaging independently-computed per-file rates
+    (macro-averaging, docs/decisions.md D58) -- a macro-average would let a 1-symbol file
+    carry the same weight as a 30-symbol file, and would need special-casing for any file
+    with zero symbols on one side; micro-averaging handles that for free, since such a
+    file just contributes 0 to both the numerator and denominator.
+
+    `files` is `(path, before, agent_after, human_after)` for every file EITHER side
+    touched -- a file only one side touched still belongs here, with the untouched side's
+    content equal to `before` (the caller's job, see `eval/harness.py`'s
+    `compute_diff_similarity`, not this function's -- this stays a pure aggregator)."""
+    pooled_agent_lines: set[tuple[str, str]] = set()
+    pooled_human_lines: set[tuple[str, str]] = set()
+    pooled_agent_symbols: set[str] = set()
+    pooled_human_symbols: set[str] = set()
+
+    for path, before, agent_after, human_after in files:
+        before_fmt = _ruff_format(before)
+        pooled_agent_lines |= _changed_line_content_scoped(
+            path, before_fmt, _ruff_format(agent_after)
+        )
+        pooled_human_lines |= _changed_line_content_scoped(
+            path, before_fmt, _ruff_format(human_after)
+        )
+
+        symbols = symbol_diff_precision_recall(path, before, agent_after, human_after)
+        pooled_agent_symbols |= symbols.agent_symbols
+        pooled_human_symbols |= symbols.human_symbols
+
+    line_union = pooled_agent_lines | pooled_human_lines
+    line_jaccard = (
+        len(pooled_agent_lines & pooled_human_lines) / len(line_union) if line_union else 1.0
+    )
+
+    if not pooled_agent_symbols and not pooled_human_symbols:
+        symbol_precision = symbol_recall = 1.0
+    else:
+        symbol_intersection = pooled_agent_symbols & pooled_human_symbols
+        symbol_precision = (
+            len(symbol_intersection) / len(pooled_agent_symbols) if pooled_agent_symbols else 0.0
+        )
+        symbol_recall = (
+            len(symbol_intersection) / len(pooled_human_symbols) if pooled_human_symbols else 0.0
+        )
+
+    return RepoDiffSimilarity(
+        line_jaccard=line_jaccard, symbol_precision=symbol_precision, symbol_recall=symbol_recall
+    )

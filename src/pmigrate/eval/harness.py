@@ -34,6 +34,7 @@ from pmigrate.agent.graph import build_migration_graph
 from pmigrate.agent.model_client import ModelClient
 from pmigrate.agent.state import AgentState
 from pmigrate.eval.config import EvalConfig
+from pmigrate.eval.diff_similarity import RepoDiffSimilarity, repo_diff_similarity
 from pmigrate.eval.metrics import RepoResult, score_run
 from pmigrate.graph.relevance import compute_work_list
 from pmigrate.graph.repo_files import read_py_files
@@ -100,6 +101,65 @@ def _dump_residual_failures(repo: RepoSpec, final_state: Any, out_path: Path) ->
                 )
 
 
+def _read_text_or_empty(path: Path) -> str:
+    return path.read_text() if path.exists() else ""
+
+
+def _git_show(repo_root: Path, sha: str, path: str) -> str:
+    """Content of `path` at `sha` inside the repo already cloned at `repo_root` -- "" if
+    the file doesn't exist at that sha (added later by the human's real fix, or already
+    deleted before `pre_sha`). A clean git failure here means "file absent," not a real
+    error to propagate; `checkout_pre_sha`'s `git clone` is a full (not shallow) clone, so
+    `post_sha` is already present in this same local history -- no second checkout."""
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "show", f"{sha}:{path}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _agent_touched_files(final_state: Any) -> set[str]:
+    touched: set[str] = set()
+    for edit in final_state.get("edits", []):
+        touched.update(edit.files_changed)
+    return touched
+
+
+def compute_diff_similarity(
+    repo: RepoSpec, source_root: Path, overlay_root: Path, final_state: Any
+) -> RepoDiffSimilarity | None:
+    """docs/decisions.md D58: `None` (not a fabricated 0.0/1.0) when there's nothing real
+    to measure -- no `human_diff_stats` on this `RepoSpec` (docs/decisions.md: "used as
+    ground truth in Phase 5"), or neither side touched any Python file. A missing
+    measurement must stay visibly missing, not look like a real, if poor, score.
+
+    Compares the UNION of (files the agent touched, from `final_state["edits"]`) and
+    (files the human's real fix touched, from `RepoSpec.human_diff_stats.changed_paths` --
+    already-validated ground truth from `corpus/validate.py`, not recomputed via a fresh
+    `git diff`). A file only one side touched still belongs in the comparison, with the
+    untouched side's content equal to `before` — that's what correctly penalizes a file
+    the human fixed that the agent never tried, and a file the agent touched that the
+    human's real fix never needed."""
+    if repo.human_diff_stats is None:
+        return None
+    human_files = {p for p in repo.human_diff_stats.changed_paths if p.endswith(".py")}
+    all_files = human_files | _agent_touched_files(final_state)
+    if not all_files:
+        return None
+
+    file_tuples = []
+    for path in sorted(all_files):
+        before = _read_text_or_empty(source_root / path)
+        overlay_path = overlay_root / path
+        agent_after = _read_text_or_empty(overlay_path) if overlay_path.exists() else before
+        human_after = _git_show(source_root, repo.post_sha, path)
+        file_tuples.append((path, before, agent_after, human_after))
+
+    return repo_diff_similarity(file_tuples)
+
+
 def run_repo(
     repo: RepoSpec,
     *,
@@ -155,7 +215,18 @@ def run_repo(
     if failures_out is not None:
         _dump_residual_failures(repo, final_state, failures_out)
 
-    return score_run(repo, final_state, wallclock_s, config=config)
+    result = score_run(repo, final_state, wallclock_s, config=config)
+
+    similarity = compute_diff_similarity(repo, source_root, overlay_root, final_state)
+    if similarity is not None:
+        result = replace(
+            result,
+            diff_line_jaccard=similarity.line_jaccard,
+            symbol_precision=similarity.symbol_precision,
+            symbol_recall=similarity.symbol_recall,
+        )
+
+    return result
 
 
 def run_corpus(
