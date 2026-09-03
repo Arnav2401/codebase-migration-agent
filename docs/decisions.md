@@ -2148,6 +2148,42 @@ the one place scoring is allowed to happen."
 
 ---
 
+## D52 — Fix-success join: "fixed" requires `applied`, computed once at scoring time
+
+**Alternatives:** count an attempt "fixed" whenever its `node_ids` end up passing,
+regardless of `outcome`; report fix-success per repo instead of aggregated across the
+whole corpus.
+
+**Why:** D51 added `RepairAttempt` history but deliberately left "was it fixed" for
+`eval/metrics.py` to answer once the run's final `cumulative_outcomes` exists. The naive
+join (just check final status) would credit `no_target`/`model_error`/`no_edit`/`rejected`
+attempts — none of which changed any code — with fixes that a later, different attempt
+(or nothing at all, if the node_ids were already passing) actually produced. Gating on
+`outcome == "applied"` first is the difference between "this specific attempt worked" and
+"this class of failure eventually got fixed by *something*" — only the former is a
+defensible per-attempt claim. Per-repo reporting was rejected because a single repo rarely
+produces enough attempts of one `FailureClass` for a rate to mean anything (the live
+corpus run's own per-class tally, docs/results/triage.md, already reads as "what
+happened" not "a rate" for exactly this reason) — aggregating across every repo in
+`fix_success_table` is what makes the numbers worth reading as a rate at all.
+
+**Known limitation, stated rather than hidden:** only end-state `cumulative_outcomes` is
+retained, not a per-iteration snapshot, so even the gated join can't fully separate
+"this attempt caused the fix" from "this attempt's own targets happened to already be
+passing again by the time something else was confirmed" — the same ambiguity
+docs/results/triage.md already flags by hand for `rohmu`'s second `validation_behaviour`
+attempt. A true causal join would need `cumulative_outcomes` snapshotted per iteration,
+which nothing in this pass adds.
+
+**Interview:** "The temptation with a join like this is to just check 'is it green now,'
+but that overstates what a single attempt actually proved. I only count a fix when the
+same attempt is the one that produced a real code change AND its own targets are green at
+the end — otherwise I'd be laundering 'something worked eventually' into 'this specific
+repair strategy works,' which is exactly the kind of dishonest number this project's whole
+premise is against."
+
+---
+
 ## Template
 
 ```

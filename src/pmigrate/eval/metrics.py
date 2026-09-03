@@ -3,11 +3,12 @@ place). Every function here is pure — given a `RepoSpec` and the graph's final
 returns a number. No I/O, no printing, no Docker.
 
 docs/decisions.md D40: this is Phase 4's minimal slice, not Phase 5's full
-`EvalConfig`/`RepoResult` sketch (interfaces.md §8) — `diff_line_jaccard`,
-`symbol_precision`/`recall`, and per-class fix-success counts are deliberately absent.
-The first two are Phase 5 ablation-comparison metrics Phase 4's own acceptance criteria
-don't need; the third needs `AgentState` to retain repair-attempt/run history it doesn't
-have yet (see D40's "deliberately not in this pass" list).
+`EvalConfig`/`RepoResult` sketch (interfaces.md §8) — `diff_line_jaccard` and
+`symbol_precision`/`recall` are deliberately absent (Phase 5 ablation-comparison metrics
+Phase 4's own acceptance criteria don't need). Per-class fix-success counts, originally on
+this same "not in this pass" list, are no longer absent: D51 gave `AgentState` the
+repair-attempt history this needed, and `ScoredRepairAttempt`/`fix_success_table` below
+are the join.
 
 docs/decisions.md D46: reads `final_state["cumulative_outcomes"]`, NOT
 `final_state["last_run"].outcomes` — `last_run` is only the most recent (often
@@ -21,12 +22,86 @@ scored as ~1/195 if this hadn't been fixed.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from pmigrate.agent.state import RepairAttempt
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import group_raw_failures
-from pmigrate.types import FailureClass, RepoSpec
+from pmigrate.types import FailureClass, RepoSpec, TestOutcome
+
+
+@dataclass(frozen=True)
+class ScoredRepairAttempt:
+    """One `RepairAttempt` (agent/state.py) paired with whether it actually worked --
+    docs/decisions.md D51 deliberately left this join out of `repair()` itself, since it
+    needs the run's FINAL `cumulative_outcomes` to answer, not anything knowable mid-loop.
+
+    `fixed` is True only when `attempt.outcome == "applied"` AND every one of
+    `attempt.node_ids` shows `status == "passed"` in the final `cumulative_outcomes` --
+    every other outcome is unconditionally False, even if the SAME node_ids ended up
+    passing later: no code changed in this attempt, so crediting it with a fix a
+    DIFFERENT, later attempt actually made would be dishonest. Known limitation, not
+    hidden: only end-state outcomes are retained, not a per-iteration snapshot, so this
+    can't distinguish "this attempt caused the fix" from "this attempt's targets happened
+    to already be passing again by the time a later attempt or run confirmed it" --
+    the same ambiguity docs/results/triage.md already flags by hand for rohmu's
+    "inconclusive" second attempt, now computed the same way for every attempt instead.
+    """
+
+    attempt: RepairAttempt
+    fixed: bool
+
+
+def _score_repair_attempt(
+    attempt: RepairAttempt, cumulative_outcomes: dict[str, TestOutcome]
+) -> ScoredRepairAttempt:
+    fixed = (
+        attempt.outcome == "applied"
+        and bool(attempt.node_ids)
+        and all(
+            cumulative_outcomes.get(nid) is not None and cumulative_outcomes[nid].status == "passed"
+            for nid in attempt.node_ids
+        )
+    )
+    return ScoredRepairAttempt(attempt=attempt, fixed=fixed)
+
+
+@dataclass(frozen=True)
+class ClassFixSuccess:
+    """One row of docs/phase-4-triage.md's per-class fix-success table -- aggregated
+    ACROSS repos by `fix_success_table` below, not per-repo (a single repo rarely has
+    enough attempts of one class for a rate to mean anything)."""
+
+    cls: FailureClass | None  # None groups every use_triage=False attempt (no single class)
+    attempts: int
+    applied: int  # attempts where an edit actually landed, whether or not it fixed anything
+    fixed: int
+
+    @property
+    def fix_rate(self) -> float:
+        return self.fixed / self.applied if self.applied else 0.0
+
+
+def fix_success_table(scores: Sequence[RepoScore]) -> dict[FailureClass | None, ClassFixSuccess]:
+    """The actual artefact docs/phase-4-triage.md calls "the single most valuable
+    artefact in the project for interviews" -- one row per FailureClass, counting every
+    scored repair attempt across the whole corpus run (both use_triage arms mixed
+    together unless the caller filters `scores` first)."""
+    counts: dict[FailureClass | None, tuple[int, int, int]] = {}
+    for score in scores:
+        for scored in score.scored_repairs:
+            key = scored.attempt.cls
+            attempts, applied, fixed = counts.get(key, (0, 0, 0))
+            attempts += 1
+            applied += int(scored.attempt.outcome == "applied")
+            fixed += int(scored.fixed)
+            counts[key] = (attempts, applied, fixed)
+    return {
+        cls: ClassFixSuccess(cls=cls, attempts=a, applied=p, fixed=f)
+        for cls, (a, p, f) in counts.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -47,6 +122,7 @@ class RepoScore:
     # each group's raw-failure count. 0.0 when there's nothing left to group (full_green or
     # no last_run yet) — distinct from 1.0, which means every failure got its own diagnosis.
     avg_failures_per_diagnosis: float
+    scored_repairs: tuple[ScoredRepairAttempt, ...]
 
 
 def score_run(
@@ -79,6 +155,9 @@ def score_run(
             sum(len(g.raw_failures) for g in grouped) / len(grouped) if grouped else 0.0
         )
 
+    repair_attempts = final_state.get("repair_attempts", [])
+    scored_repairs = tuple(_score_repair_attempt(a, cumulative_outcomes) for a in repair_attempts)
+
     return RepoScore(
         repo_id=repo.repo_id,
         use_triage=use_triage,
@@ -89,4 +168,5 @@ def score_run(
         wallclock_s=wallclock_s,
         final_diagnosis_counts=Counter(d.cls for d in diagnoses),
         avg_failures_per_diagnosis=avg_failures_per_diagnosis,
+        scored_repairs=scored_repairs,
     )
