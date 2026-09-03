@@ -31,7 +31,7 @@ no per-class routing, no PREEXISTING skip in `route()`.
 | `iscc__iscc-core` | 1.00 | 1.00 | $0.0000 | $0.0024 | 1 / 2 | No repair needed on ON; OFF made one unnecessary repair attempt (already green) that didn't change the outcome |
 | `eyurtsev__kor` | 0.9551 | 0.5056 | $0.0014 | $0.0013 | 2 / 2 | ON's clearest win, reproduced cleanly from the earlier run — OFF's combined-failure prompt fixes less per call |
 | `cmudig__draco2` *(new)* | 0.8777 | 0.8777 | $0.0010 | $0.0000 | 2 / 1 | **Same score, different reasons** — see below |
-| `okfn__opendataeditor` *(new)* | 0.0217 | **incomplete** | $0.0000 | — | 1 / killed | ON completed (near-total failure — see below). OFF hung; killed after ~14 min of no progress rather than block the rest of the corpus |
+| `okfn__opendataeditor` *(new)* | 0.0217 | **unmeasured — infra issue** | $0.0000 | — | 1 / killed (x2) | ON completed (near-total failure — see below). OFF hung on **two separate attempts**, isolated reruns included — see below |
 
 **Average pass rate, original 5 repos only (directly comparable to the previous writeup):
 0.6672 (ON) vs 0.5771 (OFF)** — up from 0.640/0.578 pre-D50. **Average pass rate, all 7
@@ -85,15 +85,29 @@ a genuinely hard repo — T1's mechanical rewrite alone leaves it almost entirel
 rather than a harness bug, but with only one data point it's not yet possible to say
 whether triage or the model backend could do meaningfully better with more budget.
 
-The **OFF** arm did not complete. It got through T1 and the first test run (also 2/92),
-then hung after the classify step with no log output and no CPU progress for over 10
-minutes — a single stalled HTTPS connection to Groq's API sat in `CLOSE_WAIT`, well past
-the point where `GroqModelClient`'s own `timeout=120` + 3 retries (docs/decisions.md D49)
-should have surfaced an error either way. The harness's `wallclock_cap_s=900` budget check
-(`agent/budget.py`) is evaluated between graph nodes, not as a hard interrupt on a blocking
-call, so it couldn't rescue a call that never returned. The process was killed manually
-rather than left to block the rest of the corpus. **This cell is a known gap, not a zero**
-— treat `okfn__opendataeditor`'s OFF-arm score as unmeasured, not as evidence either way.
+The **OFF** arm did not complete, on either attempt. On the full corpus run, it got
+through T1 and the first test run (also 2/92), then hung after the classify step with no
+log output and no CPU progress for over 10 minutes — a single stalled HTTPS connection to
+Groq's API sat in `CLOSE_WAIT`. A targeted, isolated rerun of just this one repo/arm
+combination (`scratchpad/rerun_opendataeditor_off.py`, so a repeat hang couldn't block
+anything else) reached the exact same point — T1 applied, 2/92 passing, classified as
+`unknown` — and hung again on the repair call, this time with the socket sitting in
+`ESTABLISHED` rather than `CLOSE_WAIT`, but otherwise identical: 10+ minutes of zero CPU
+progress on the same unclosed connection, well past `GroqModelClient`'s own `timeout=120`
++ 3 retries (docs/decisions.md D49), which should have raised an error either way. Two
+different socket states across two attempts both failing to resolve within the client's
+stated timeout points at an infrastructure-level problem — either something about this
+specific request (payload size/shape for this repo) that the Groq API or an intermediate
+proxy handles by holding the connection open indefinitely instead of responding or
+closing, or a local networking/sandbox condition that prevents `requests`' own read
+timeout from firing — rather than a fluke in one run. The harness's `wallclock_cap_s=900`
+budget check (`agent/budget.py`) is evaluated between graph nodes, not as a hard interrupt
+on a blocking call, so it can't rescue a call that never returns either way. Both attempts
+were killed manually. **This cell is an infrastructure gap, not a zero** — treat
+`okfn__opendataeditor`'s OFF-arm score as unmeasured, and treat the hang itself as a
+finding: repair calls against this repo (at least) can stall past the client's own
+declared timeout, independent of `use_triage`, which is worth root-causing before trusting
+any Groq-backed run's silence to mean "no requests are stuck."
 
 ## Preliminary per-class attempt tally (`use_triage=True` arm, all 7 repos)
 
@@ -109,9 +123,14 @@ sample size — read it as "what happened in these attempts," not a rate.
 
 ## What's NOT here yet
 
-- **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — the run
-  hung and was killed. Worth a targeted rerun of just this one cell before drawing any
-  conclusion about triage's effect on this repo.
+- **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — hung on
+  two separate attempts (the full corpus run and an isolated targeted rerun), both killed
+  manually. This is now a suspected infrastructure issue (a `requests` call that outlives
+  its own `timeout=120` with no exception raised) rather than a one-off, and it should be
+  root-caused — e.g. reproduce outside the harness with a bare `requests.post` against the
+  same payload, check for a network proxy in the sandbox environment that silently holds
+  connections open — before trusting this pipeline's silence elsewhere to mean "nothing is
+  stuck."
 - **Classifier accuracy on a hand-labelled set.** `docs/results/triage_failures_dev.jsonl`
   has real residual failures with predicted classes and full traceback text, but nothing
   has been hand-labelled against it yet, and it's overwritten each run rather than
