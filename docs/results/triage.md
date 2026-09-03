@@ -160,7 +160,29 @@ shapes, and one overly-narrow `ImportError` pattern. Four new rules in `triage/r
 later: **96.8%** (398/411), with two known, accepted residual gaps documented in D56
 rather than chased with overfit regexes. Full trace: docs/decisions.md D56.
 
-## What's NOT here yet
+## Median cost per repo drops — but the mean doesn't, and that's worth saying
+
+`docs/phase-4-triage.md`'s last criterion, computed from the headline table's real per-repo
+`usd` figures above. Comparing the same 6 repos on both arms (`okfn__opendataeditor`'s OFF
+cell is unmeasured, so it's excluded from both sides to keep the comparison fair, not just
+dropped from OFF):
+
+| | ON | OFF |
+|---|---|---|
+| **Median usd/repo** | **$0.0016** | $0.0022 |
+| Mean usd/repo | $0.0029 | $0.0026 |
+
+The median drops, as the criterion asks — triage's per-diagnosis routing keeps the
+*typical* repo's prompt small. But the **mean moves the other way**: ON is more expensive
+on average than OFF across these same 6 repos. One repo drives it —
+`SupImDos__pydantic-argparse`, ON's most expensive cell ($0.0081, 9 real repair attempts,
+none of which fixed the genuinely hard `ModelField` case) pulls ON's mean up further than
+any single OFF cell pulls OFF's. Reporting only the median here would be technically
+correct and quietly misleading: triage lowers the typical cost by keeping most prompts
+small, but it doesn't cap the worst case — a genuinely hard repo can still rack up many
+real (not wasted) attempts, and volume of real attempts costs the same per-attempt
+regardless of which arm is running. Worth remembering if a future writeup cites "cost
+savings" as a headline claim: state which statistic and why, since the two disagree here.
 
 - **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — hung on
   two separate attempts (the full corpus run and an isolated targeted rerun), both killed
