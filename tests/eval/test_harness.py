@@ -126,6 +126,73 @@ def test_run_repo_scores_a_t1_only_full_green_run(tmp_path: Path) -> None:
     assert result.config.triage is True
 
 
+def test_run_repo_rejects_a_t1_only_config_paired_with_a_real_model_client(
+    tmp_path: Path,
+) -> None:
+    # docs/decisions.md D62: config.tiers is the source of truth -- a mismatch against
+    # the caller's own model_client must fail loud, not silently run repair() anyway.
+    source_root, overlay_root = _setup_source(tmp_path)
+    repo = _repo(_baseline(frozenset({"t.py::test_a"})))
+    sandbox = FakeSandbox(responses=[_passed_run()])
+    config = EvalConfig(name="t1_only", model="fake", tiers=frozenset({"T1"}))
+
+    try:
+        run_repo(
+            repo,
+            image=sandbox.build(repo, "v1"),
+            source_root=source_root,
+            overlay_root=overlay_root,
+            sandbox=sandbox,
+            model_client=FakeModelClient(responses=[]),
+            config=config,
+        )
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "excludes T2/T3" in str(e)
+
+
+def test_run_repo_t1_only_config_with_no_model_client_runs_fine(tmp_path: Path) -> None:
+    source_root, overlay_root = _setup_source(tmp_path)
+    repo = _repo(_baseline(frozenset({"t.py::test_a"})))
+    sandbox = FakeSandbox(responses=[_passed_run()])
+    config = EvalConfig(name="t1_only", model="fake", tiers=frozenset({"T1"}))
+
+    result = run_repo(
+        repo,
+        image=sandbox.build(repo, "v1"),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        sandbox=sandbox,
+        model_client=None,
+        config=config,
+    )
+
+    assert result.full_green is True
+
+
+def test_run_repo_no_t1_config_leaves_the_overlay_unmodified_by_codemods(
+    tmp_path: Path,
+) -> None:
+    # docs/decisions.md D62: no_t1 threads enable_t1=False into build_migration_graph --
+    # the file T1 would otherwise rewrite (x = m.dict()) must survive untouched.
+    source_root, overlay_root = _setup_source(tmp_path)
+    repo = _repo(_baseline(frozenset({"t.py::test_a"})))
+    sandbox = FakeSandbox(responses=[_passed_run()])
+    config = EvalConfig(name="no_t1", model="fake", tiers=frozenset({"T2", "T3"}))
+
+    run_repo(
+        repo,
+        image=sandbox.build(repo, "v1"),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        sandbox=sandbox,
+        model_client=FakeModelClient(responses=[]),
+        config=config,
+    )
+
+    assert (overlay_root / "app" / "models.py").read_text() == "x = m.dict()\n"
+
+
 def test_run_repo_dumps_residual_failures_with_full_text_and_predicted_class(
     tmp_path: Path,
 ) -> None:

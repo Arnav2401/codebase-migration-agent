@@ -3,11 +3,13 @@ corpus repos and scores each one via `eval/metrics.py`. Still NOT the full resum
 parallel, SQLite-backed harness interfaces.md §8/phase-5-eval.md describe — that's a
 later Phase 5 step, built once `EvalConfig`/`RepoResult` (this step) have real callers.
 `run_repo`/`run_corpus` now take a full `EvalConfig` rather than a bare `use_triage: bool`,
-but only `config.triage` (threaded to `build_migration_graph`) and
-`config.usd_cap_per_repo` (the default `BudgetState.usd_cap` when the caller doesn't pass
-one explicitly) actually affect behavior yet — `config.model`/`config.seed` are carried as
-provenance on the resulting `RepoResult`, not yet consumed to construct anything, since the
-caller already passes a live `model_client` object directly.
+but only `config.triage` (threaded to `build_migration_graph`), `config.tiers`
+(docs/decisions.md D62 — threaded to `build_migration_graph`'s `enable_t1`, and validated
+against the caller's own `model_client`), and `config.usd_cap_per_repo` (the default
+`BudgetState.usd_cap` when the caller doesn't pass one explicitly) actually affect
+behavior yet — `config.model`/`config.seed` are carried as provenance on the resulting
+`RepoResult`, not yet consumed to construct anything, since the caller already passes a
+live `model_client` object directly.
 
 Split for testability (CLAUDE.md: no network in unit tests): `run_repo` takes an
 ALREADY-checked-out `source_root` and a pre-built `image`, so it can be exercised with
@@ -214,6 +216,14 @@ def run_repo(
     `wallclock_cap_s` for a specific run)."""
     if repo.baseline is None:
         raise ValueError(f"{repo.repo_id} has no captured baseline (I4) — run capture-baselines")
+    if "T2" not in config.tiers and model_client is not None:
+        # docs/decisions.md D62: config.tiers is the source of truth for which tiers ran
+        # — a t1_only config paired with a real model_client would silently contradict
+        # itself (repair() would still fire) if this weren't checked here.
+        raise ValueError(
+            f"config.tiers={set(config.tiers)!r} excludes T2/T3 but a real model_client "
+            "was passed — pass model_client=None for a t1_only config"
+        )
 
     resolved = resolve_repo(read_py_files(source_root))
     work_list = compute_work_list(resolved, repo.repo_id)
@@ -227,6 +237,7 @@ def run_repo(
         model_client=model_client,
         use_triage=config.triage,
         retrieval=_build_retrieval(config, repo.repo_id),
+        enable_t1="T1" in config.tiers,
     )
 
     start = time.time()

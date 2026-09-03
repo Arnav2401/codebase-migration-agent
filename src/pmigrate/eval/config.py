@@ -6,11 +6,15 @@ for `retrieval`/`tiers`, and the shape is already agreed in interfaces.md -- but
 As of docs/decisions.md D60/D61, all three `retrieval` kinds are real: `"graph"`
 (`agent/retrieval.py`'s `GraphRetrieval`), `"wholefile"` (`WholefileRetrieval`), and
 `"embedding"` (`EmbeddingRetrieval`, local `sentence-transformers` -- an optional
-dependency, `pyproject.toml`'s `embedding` extra). `tiers` still exists only so a config
-can be constructed and referenced meaningfully in results and run manifests going
-forward; requesting anything but the full T1+T2+T3 set raises `NotImplementedError`
-rather than silently running the wrong thing -- T1/T2/T3 gating in `agent/graph.py` is
-its own later step, not guessed at here.
+dependency, `pyproject.toml`'s `embedding` extra). As of docs/decisions.md D62, `tiers`
+selects one of three real arms: the full `{"T1","T2","T3"}` set (default), `{"T1"}`
+("t1_only" -- `run_repo` forces
+`model_client=None`, matching `agent/graph.py`'s existing "no client means no repair"
+behavior), or `{"T2","T3"}` ("no_t1" -- `run_repo` passes `enable_t1=False`). Any OTHER
+combination raises `NotImplementedError` rather than silently running the wrong thing:
+`repair()` fuses T2 and T3 into one node (no `source="T3"` is ever constructed anywhere
+in the codebase), so there is no way to honor a request that includes one but not the
+other -- `{"T2"}` alone is not a real, distinguishable arm today.
 
 `RetrievalKind` (this module) is a plain string-literal type -- deliberately NOT named
 `Retrieval`, which is `agent/retrieval.py`'s actual behavioral Protocol (`related_files`).
@@ -27,6 +31,9 @@ RetrievalKind = Literal["graph", "embedding", "wholefile"]
 Tier = Literal["T1", "T2", "T3"]
 
 _ALL_TIERS: frozenset[Tier] = frozenset({"T1", "T2", "T3"})
+_T1_ONLY: frozenset[Tier] = frozenset({"T1"})
+_NO_T1: frozenset[Tier] = frozenset({"T2", "T3"})
+_IMPLEMENTED_TIER_SETS: frozenset[frozenset[Tier]] = frozenset({_ALL_TIERS, _T1_ONLY, _NO_T1})
 _IMPLEMENTED_RETRIEVAL_KINDS: frozenset[RetrievalKind] = frozenset(
     {"graph", "wholefile", "embedding"}
 )
@@ -48,8 +55,10 @@ class EvalConfig:
                 f"retrieval={self.retrieval!r} is not implemented yet -- only "
                 f"{sorted(_IMPLEMENTED_RETRIEVAL_KINDS)} run today"
             )
-        if self.tiers != _ALL_TIERS:
+        if self.tiers not in _IMPLEMENTED_TIER_SETS:
             raise NotImplementedError(
-                f"tiers={set(self.tiers)!r} is not implemented yet -- only the full "
-                "T1+T2+T3 set runs today, gating individual tiers is a later Phase 5 step"
+                f"tiers={set(self.tiers)!r} is not implemented yet -- only "
+                f"{sorted(sorted(t) for t in _IMPLEMENTED_TIER_SETS)} run today "
+                "(T2 and T3 share one node in agent/graph.py's repair(), so any set "
+                "naming one but not the other can't be honored)"
             )

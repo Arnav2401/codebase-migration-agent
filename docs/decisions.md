@@ -2626,6 +2626,48 @@ even mattered."
 
 ---
 
+## D62 — Tier gating: `t1_only`/`no_t1` are real arms, `{"T2"}` alone is not
+
+**Alternatives:** accept any `frozenset[Tier]` and let `agent/graph.py` do its best —
+rejected as dishonest: since `repair()` (T2) and the residual-failure repair loop (T3,
+per PLAN.md's own three-tier table) are ONE node with no `source="T3"` ever constructed
+anywhere in the codebase (confirmed by grep before this change), a config claiming
+`tiers={"T2"}` would silently still run whatever `tiers={"T2","T3"}` runs — the type would
+promise a distinction the implementation can't make good on. Building a real T2/T3 split
+first (e.g. capping `repair()`'s iteration count and only calling later attempts "T3") was
+also considered and rejected as scope creep — no phase-5-eval.md acceptance criterion asks
+for it yet, and inventing the split just to make the config honest would be building
+untested plumbing ahead of a real need.
+
+**Why:** `EvalConfig.tiers` needs to be the single source of truth for which tiers an eval
+run actually exercised (docs/interfaces.md §8's run-manifest goal), not a label the caller
+can silently contradict. Two arms are cheap because the machinery already exists:
+`t1_only` (`{"T1"}`) is just `model_client=None`, which `repair()` already checks
+(graph.py's `model_client is None or state.last_run is None` guard, predating this
+decision); `no_t1` (`{"T2","T3"}`) needed one new thing — `edit_t1` is LangGraph's
+unconditional entry point with no conditional-edge mechanism to route around it, so
+"disabled" means the node still runs (copying every source file into `overlay_root`
+unmodified, since `repair()` needs a populated overlay regardless of which tiers are on)
+but skips `apply_rules` entirely.
+
+**Fixed by** `agent/graph.py`'s new `enable_t1: bool = True` param on
+`build_migration_graph`; `eval/config.py`'s `_IMPLEMENTED_TIER_SETS` (`{"T1","T2","T3"}`,
+`{"T1"}`, `{"T2","T3"}` — anything else still raises `NotImplementedError`, naming the
+T2/T3-fusion reason in the message rather than a generic "not implemented"); and
+`eval/harness.py`'s `run_repo`, which now raises `ValueError` if `config.tiers` excludes
+T2/T3 but a real `model_client` was passed anyway (fail loud on the contradiction rather
+than silently trusting whichever of the two the caller got right), and threads
+`enable_t1="T1" in config.tiers` into `build_migration_graph`.
+
+**Interview:** "The honest part of this wasn't the two arms that work — `t1_only` and
+`no_t1` were both mostly free, since the underlying gates already existed or needed one
+small addition. It was refusing to accept `tiers={"T2"}` as if it meant something the code
+could actually honor. `repair()` fuses T2 and T3 into one node; pretending the config could
+tell them apart would have produced a config object that lies about what ran, which is
+worse than not having the axis at all."
+
+---
+
 ## Template
 
 ```

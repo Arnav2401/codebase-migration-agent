@@ -122,6 +122,7 @@ def build_migration_graph(
     no_progress_threshold: int = 2,
     use_triage: bool = True,
     retrieval: Retrieval | None = None,
+    enable_t1: bool = True,
 ) -> Any:
     # Any: langgraph's CompiledStateGraph is generic over 4 type params callers never
     # interact with beyond .invoke() — parametrizing it precisely here would add real
@@ -143,6 +144,12 @@ def build_migration_graph(
     # repair() sends alongside the target file. None (the default) preserves the exact
     # pre-Phase-5 behavior (`find_related_files`'s grep heuristic, D28) unchanged, so
     # every test that doesn't pass this keeps passing without modification.
+    #
+    # enable_t1 (docs/decisions.md D62): Phase 5's tier-gating axis. `edit_t1` is
+    # LangGraph's unconditional entry point (no conditional-edge mechanism reaches around
+    # it), so "disabled" means the node still runs but skips applying any codemod rule --
+    # it still copies every source file into overlay_root unmodified, since repair() reads
+    # its target file from there regardless of which tiers are enabled.
     no_progress = NoProgressDetector(repeat_threshold=no_progress_threshold)
     classifier = RuleBasedClassifier()
 
@@ -202,6 +209,12 @@ def build_migration_graph(
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             if not dst_file.exists():
                 dst_file.write_text(src_file.read_text())
+
+            if not enable_t1:
+                # tier-gated off (docs/decisions.md D62) — overlay still needs this
+                # file's UNMODIFIED content so repair() has something to read, but no
+                # codemod rule gets a chance to touch it.
+                continue
 
             before = dst_file.read_text()
             after, rule_edits = apply_rules(before, path, ALL_RULES)

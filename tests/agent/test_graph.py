@@ -178,6 +178,27 @@ def test_t1_only_processes_whole_work_list_before_first_test_run(tmp_path: Path)
     assert (overlay_root / "app" / "settings.py").read_text() == "y = m.model_dump_json()\n"
 
 
+def test_enable_t1_false_copies_files_unmodified_and_applies_no_rule(tmp_path: Path) -> None:
+    # docs/decisions.md D62 (no_t1 arm): edit_t1 still runs (LangGraph's unconditional
+    # entry point has no way around it) but must skip apply_rules entirely, leaving the
+    # overlay content byte-for-byte identical to source.
+    source_root, overlay_root = _setup_source(tmp_path)
+    sandbox = FakeSandbox(responses=[_failed_run()])
+    graph = build_migration_graph(
+        sandbox=sandbox,
+        image=_image(),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        policy=SandboxPolicy(),
+        enable_t1=False,
+    )
+    state = AgentState(repo=_repo(), work_list=[[_unit()]])
+    result = graph.invoke(state)
+
+    assert result["edits"] == []
+    assert (overlay_root / "app" / "models.py").read_text() == "x = m.dict()\n"
+
+
 def test_no_model_client_finalizes_immediately_on_persistent_failure(tmp_path: Path) -> None:
     # T1-only mode has no repair capability — a failure it can't fix should finalize
     # (not loop forever), matching graph.py's documented "repair only if model_client".

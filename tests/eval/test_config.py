@@ -36,9 +36,28 @@ def test_unimplemented_retrieval_kind_raises_not_implemented() -> None:
         EvalConfig(name="bad", model="gemini-3.6-flash", retrieval="not_a_real_kind")  # type: ignore[arg-type]
 
 
-def test_partial_tier_set_raises_not_implemented() -> None:
+def test_t1_only_tier_set_constructs_fine() -> None:
+    # docs/decisions.md D62: t1_only became a real, implemented arm
+    config = EvalConfig(name="t1_only", model="gemini-3.6-flash", tiers=frozenset({"T1"}))
+    assert config.tiers == frozenset({"T1"})
+
+
+def test_no_t1_tier_set_constructs_fine() -> None:
+    # docs/decisions.md D62: no_t1 became a real, implemented arm
+    config = EvalConfig(name="no_t1", model="gemini-3.6-flash", tiers=frozenset({"T2", "T3"}))
+    assert config.tiers == frozenset({"T2", "T3"})
+
+
+def test_t2_alone_raises_not_implemented() -> None:
+    # repair() fuses T2 and T3 into one node -- no config can honor a request naming one
+    # but not the other (docs/decisions.md D62)
     with pytest.raises(NotImplementedError, match="tiers"):
-        EvalConfig(name="t1_only", model="gemini-3.6-flash", tiers=frozenset({"T1"}))
+        EvalConfig(name="t2_only", model="gemini-3.6-flash", tiers=frozenset({"T2"}))
+
+
+def test_t1_and_t2_without_t3_raises_not_implemented() -> None:
+    with pytest.raises(NotImplementedError, match="tiers"):
+        EvalConfig(name="t1_t2_only", model="gemini-3.6-flash", tiers=frozenset({"T1", "T2"}))
 
 
 def test_config_is_hashable_for_future_resumability_keying() -> None:
