@@ -24,6 +24,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from pmigrate.triage.collect import collect_raw_failures
+from pmigrate.triage.grouping import group_raw_failures
 from pmigrate.types import FailureClass, RepoSpec
 
 
@@ -37,6 +39,14 @@ class RepoScore:
     usd_spent: float
     wallclock_s: float
     final_diagnosis_counts: Counter[FailureClass]  # from the LAST classify_node call only
+    # docs/phase-4-triage.md acceptance criterion: "avg failures-per-diagnosis > 1" as
+    # evidence grouping is consolidating related failures, not routing one-by-one. Same
+    # "last classify call only" scope as final_diagnosis_counts above — recomputed here via
+    # group_raw_failures rather than read off `diagnoses` because classify_and_group's own
+    # return type (list[Diagnosis], the Classifier protocol's contract) already discards
+    # each group's raw-failure count. 0.0 when there's nothing left to group (full_green or
+    # no last_run yet) — distinct from 1.0, which means every failure got its own diagnosis.
+    avg_failures_per_diagnosis: float
 
 
 def score_run(
@@ -60,6 +70,15 @@ def score_run(
     budget = final_state["budget"]
     diagnoses = final_state.get("diagnoses", [])
 
+    last_run = final_state.get("last_run")
+    if last_run is None:
+        avg_failures_per_diagnosis = 0.0
+    else:
+        grouped = group_raw_failures(collect_raw_failures(last_run), repo.baseline)
+        avg_failures_per_diagnosis = (
+            sum(len(g.raw_failures) for g in grouped) / len(grouped) if grouped else 0.0
+        )
+
     return RepoScore(
         repo_id=repo.repo_id,
         use_triage=use_triage,
@@ -69,4 +88,5 @@ def score_run(
         usd_spent=budget.usd_spent,
         wallclock_s=wallclock_s,
         final_diagnosis_counts=Counter(d.cls for d in diagnoses),
+        avg_failures_per_diagnosis=avg_failures_per_diagnosis,
     )

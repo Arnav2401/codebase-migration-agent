@@ -10,6 +10,7 @@ from pmigrate.types import (
     FailureClass,
     RepoSpec,
     TestOutcome,
+    TestRun,
 )
 
 
@@ -110,6 +111,82 @@ def test_empty_cumulative_outcomes_scores_as_zero_pass_rate() -> None:
     )
     assert score.pass_rate == 0.0
     assert score.full_green is False
+
+
+def _run(outcomes: tuple[TestOutcome, ...]) -> TestRun:
+    return TestRun(
+        outcomes=outcomes, collection_errors=(), exit_code=1, duration_s=1.0, truncated=False
+    )
+
+
+def test_avg_failures_per_diagnosis_defaults_to_zero_without_a_last_run() -> None:
+    # no last_run key at all -- e.g. a repo that crashed before its first test run.
+    repo = _repo(_baseline(frozenset({"t.py::a"})))
+    score = score_run(
+        repo,
+        {"cumulative_outcomes": {}, "budget": BudgetState(), "diagnoses": []},
+        1.0,
+        use_triage=True,
+    )
+    assert score.avg_failures_per_diagnosis == 0.0
+
+
+def test_avg_failures_per_diagnosis_is_zero_when_last_run_has_nothing_to_group() -> None:
+    # distinct from the "no last_run at all" case above: here a real run happened and
+    # everything passed, so there's nothing left to diagnose -- still 0.0, not 1.0.
+    repo = _repo(_baseline(frozenset({"t.py::a"})))
+    final_state = {
+        "cumulative_outcomes": {"t.py::a": _outcome("t.py::a", "passed")},
+        "budget": BudgetState(),
+        "diagnoses": [],
+        "last_run": _run((_outcome("t.py::a", "passed"),)),
+    }
+    score = score_run(repo, final_state, 1.0, use_triage=True)
+    assert score.avg_failures_per_diagnosis == 0.0
+
+
+def test_avg_failures_per_diagnosis_is_one_when_every_failure_stays_isolated() -> None:
+    repo = _repo(_baseline(frozenset()))
+    outcomes = (
+        TestOutcome(
+            "t.py::a", "failed", 0.1, "boom", "app/a.py:1: in x\nE   AssertionError: a", None
+        ),
+        TestOutcome(
+            "t.py::b", "failed", 0.1, "boom", "app/b.py:1: in y\nE   AssertionError: b", None
+        ),
+    )
+    final_state = {
+        "cumulative_outcomes": {},
+        "budget": BudgetState(),
+        "diagnoses": [],
+        "last_run": _run(outcomes),
+    }
+    score = score_run(repo, final_state, 1.0, use_triage=True)
+    assert score.avg_failures_per_diagnosis == 1.0
+
+
+def test_avg_failures_per_diagnosis_reflects_real_grouping() -> None:
+    # docs/phase-4-triage.md: "twenty tests failing from one bad import is one problem" --
+    # same shared traceback tests/triage/test_grouping.py uses for the grouping logic
+    # itself, exercised here through score_run rather than group_raw_failures directly.
+    shared_traceback = (
+        "fastapi_plugins/settings.py:57: in ConfigManager\n"
+        "    def register(self, name: str, config: pydantic.BaseSettings) -> None:\n"
+        "E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved"
+    )
+    repo = _repo(_baseline(frozenset()))
+    outcomes = (
+        TestOutcome("tests/test_control.py::test_a", "failed", 0.1, "boom", shared_traceback, None),
+        TestOutcome("tests/test_logger.py::test_b", "failed", 0.1, "boom", shared_traceback, None),
+    )
+    final_state = {
+        "cumulative_outcomes": {},
+        "budget": BudgetState(),
+        "diagnoses": [],
+        "last_run": _run(outcomes),
+    }
+    score = score_run(repo, final_state, 1.0, use_triage=True)
+    assert score.avg_failures_per_diagnosis == 2.0
 
 
 def test_final_diagnosis_counts_reflect_state_diagnoses() -> None:
