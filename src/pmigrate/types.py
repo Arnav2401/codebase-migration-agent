@@ -13,7 +13,7 @@ actually built — treat them as a starting contract, not a finished one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
@@ -206,35 +206,3 @@ class TraceEvent:
     tokens_in: int | None = None
     tokens_out: int | None = None
     usd: float | None = None
-
-
-# ---------------------------------------------------------------------------
-# Phase 5 — eval (docs/interfaces.md §8)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class EvalConfig:
-    name: str
-    model: str
-    retrieval: Literal["graph", "embedding", "wholefile"]
-    tiers: frozenset[Literal["T1", "T2", "T3"]]
-    triage: bool
-    seed: int
-    usd_cap_per_repo: float
-
-
-@dataclass(frozen=True)
-class RepoResult:
-    repo_id: str
-    config: str
-    pass_rate: float
-    full_green: bool
-    iterations: int
-    usd: float
-    wallclock_s: float
-    diff_line_jaccard: float
-    symbol_precision: float
-    symbol_recall: float
-    failure_classes: dict[FailureClass, int] = field(default_factory=dict)
-    trace_path: str = ""
