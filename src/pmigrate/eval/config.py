@@ -25,7 +25,7 @@ not a class with behavior."
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 RetrievalKind = Literal["graph", "embedding", "wholefile"]
 Tier = Literal["T1", "T2", "T3"]
@@ -62,3 +62,30 @@ class EvalConfig:
                 "(T2 and T3 share one node in agent/graph.py's repair(), so any set "
                 "naming one but not the other can't be honored)"
             )
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe encoding (docs/decisions.md D63): `tiers` is a frozenset, not
+        JSON-native, so `dataclasses.asdict` alone can't round-trip this type -- lives
+        here, not in `eval/store.py`/`eval/manifest.py`, since both need the exact same
+        encoding and this is the type that owns what its own fields mean."""
+        return {
+            "name": self.name,
+            "model": self.model,
+            "retrieval": self.retrieval,
+            "tiers": sorted(self.tiers),
+            "triage": self.triage,
+            "seed": self.seed,
+            "usd_cap_per_repo": self.usd_cap_per_repo,
+        }
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> EvalConfig:
+        return EvalConfig(
+            name=data["name"],
+            model=data["model"],
+            retrieval=data["retrieval"],
+            tiers=frozenset(data["tiers"]),
+            triage=data["triage"],
+            seed=data["seed"],
+            usd_cap_per_repo=data["usd_cap_per_repo"],
+        )

@@ -2668,6 +2668,61 @@ worse than not having the axis at all."
 
 ---
 
+## D63 — Resumable SQLite result store + run manifest, no CLI entrypoint yet
+
+**Alternatives:** a generic reflection-based serializer (`dataclasses.asdict` +
+`json.dumps` with a custom default) for `RepoResult` — rejected because `asdict` leaves
+`EvalConfig.tiers` (a frozenset) and `RepoResult.final_diagnosis_counts` (a `Counter`)
+un-JSON-able as-is, and a `default=` hook papering over that would hide exactly which
+fields need special handling instead of making it explicit; a plain pickle of the
+dataclass — rejected since a pickled blob isn't inspectable from a plain
+`sqlite3 results.db "select ..."` shell, defeating the "queryable dashboard index"
+purpose interfaces.md §7 already established for this project's SQLite usage. Also
+considered building the full `make eval` CLI entrypoint (config loading from
+`configs/*.yaml`, argument parsing) in the same pass — rejected as scope creep: the
+harness docstring already documented that gap honestly (D57), and the resumability axis
+(store + manifest) is independently completable and testable without it.
+
+**Why:** phase-5-eval.md's own design explicitly separates two things this decision
+treats as two modules: a per-CELL result store keyed by `(repo_id, config_hash,
+corpus_sha)` (skip work already done) and a per-INVOCATION run manifest (record what
+config of the world produced a batch of results, satisfying I6 even for a run that
+crashes before any repo finishes). Conflating them into one artifact would make neither
+job clean — a manifest doesn't need per-repo granularity, and a result row doesn't need
+prompt hashes or an agent git sha repeated on every cell.
+
+`EvalConfig.to_dict`/`from_dict` were added to `eval/config.py` itself, not built as
+private helpers inside `eval/store.py` (this decision's first draft did that, then moved
+them) — both `eval/store.py` and `eval/manifest.py` need the identical encoding, and the
+type that owns the fields should own what "encode this" means, not whichever module
+happened to need it first.
+
+**Fixed by** `eval/store.py`'s `ResultStore` (one SQLite table, `PRIMARY KEY (repo_id,
+config_hash, corpus_sha)`, `INSERT OR REPLACE` for idempotent re-scores, denormalized
+`pass_rate`/`full_green`/`usd_spent` columns alongside a `result_json` blob) and
+`ResumeContext` (bundles `store` + `corpus_sha` — one optional param on `run_corpus`
+rather than two that would have to agree independently); `eval/manifest.py`'s
+`RunManifest`/`write_run_manifest` (written once with `ended_at=None` before a run, again
+with the real value after — satisfies phase-5-eval.md's "written before the run" without
+claiming an unfinished run already has an end time) and `build_prompt_hashes`/
+`agent_git_sha` (real file reads / a real `git rev-parse HEAD` subprocess call — the same
+real-I/O carve-out `eval/harness.py`'s own docstring already draws around
+`checkout_pre_sha`, not unit-tested against a fake). `run_corpus` gained one param,
+`resume: ResumeContext | None`, checked before the expensive checkout/build/run_repo
+work per repo, not just before scoring — resumability's entire value is skipping that
+work, not skipping a cheap dict lookup at the end.
+
+**Interview:** "The SQLite key is `(repo_id, config_hash, corpus_sha)`, not just
+`(repo_id, config_name)` — a human-readable name like `'graph'` isn't a safe resume key
+on its own, because nothing stops someone from editing that config's `usd_cap_per_repo`
+or `seed` between two invocations and getting a silently stale result back under the same
+name. Hashing the actual field values, and hashing the corpus manifest's own bytes
+alongside it, means a resume can only ever reuse a result that was scored under the
+literal same conditions — if either changes, every cached row misses and the affected
+cells re-run for real."
+
+---
+
 ## Template
 
 ```

@@ -1,11 +1,13 @@
 import json
-from dataclasses import dataclass, field
+import subprocess
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
 from pmigrate.agent.retrieval import GraphRetrieval, WholefileRetrieval
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.harness import _build_retrieval, run_repo
+from pmigrate.eval.harness import _build_retrieval, run_corpus, run_repo
+from pmigrate.eval.store import ResultStore, ResumeContext, config_hash
 from pmigrate.types import (
     BaselineResult,
     ImageRef,
@@ -289,3 +291,110 @@ def test_build_retrieval_maps_wholefile_config_to_wholefile_retrieval() -> None:
     config = EvalConfig(name="test", model="fake", retrieval="wholefile")
     retrieval = _build_retrieval(config, repo_id="acme__widgets")
     assert isinstance(retrieval, WholefileRetrieval)
+
+
+def _run_git(*args: str, cwd: Path) -> str:
+    return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _make_clonable_repo(tmp_path: Path, content: str = "x = m.dict()\n") -> tuple[Path, str]:
+    """A real, throwaway local git repo -- `run_corpus` calls `checkout_pre_sha`, which
+    shells out to a real `git clone`. Cloning a local path involves no network at all
+    (matches CLAUDE.md's "no network in unit tests" — this is disk + subprocess only),
+    same real-local-git precedent tests/eval/test_diff_similarity_harness.py already
+    establishes."""
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    _run_git("git", "init", "-q", cwd=origin_dir)
+    _run_git("git", "config", "user.email", "t@t.com", cwd=origin_dir)
+    _run_git("git", "config", "user.name", "t", cwd=origin_dir)
+    (origin_dir / "app").mkdir()
+    (origin_dir / "app" / "models.py").write_text(content)
+    _run_git("git", "add", ".", cwd=origin_dir)
+    _run_git("git", "commit", "-q", "-m", "pre", cwd=origin_dir)
+    sha = _run_git("git", "rev-parse", "HEAD", cwd=origin_dir)
+    return origin_dir, sha
+
+
+def test_run_corpus_with_resume_skips_a_cell_already_in_the_store(tmp_path: Path) -> None:
+    config = _config()
+    repo = _repo(_baseline(frozenset({"t.py::test_a"})))
+    # deliberately an invalid URL -- if the resume-skip logic didn't fire before
+    # checkout_pre_sha, this repo would fail to clone and be silently dropped (caught by
+    # run_corpus's own except Exception), which would ALSO make the assertion below fail,
+    # just less informatively than a clean skip would.
+    bad_repo = replace(repo, url="https://example.invalid/does/not/exist")
+
+    source_root, overlay_root = _setup_source(tmp_path)
+    store = ResultStore(tmp_path / "results.db")
+    existing = run_repo(
+        repo,
+        image=ImageRef(
+            tag="img",
+            repo_id=repo.repo_id,
+            sha=repo.pre_sha,
+            pydantic="v2",
+            deps_hash="x",
+            test_cmd=repo.test_cmd,
+        ),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=config,
+    )
+    store.save_result(existing, "deadbeef", written_at=1.0)
+    resume = ResumeContext(store=store, corpus_sha="deadbeef")
+
+    results = run_corpus(
+        [bad_repo],
+        work_root=tmp_path / "work",
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=config,
+        resume=resume,
+    )
+
+    assert results == [existing]
+
+
+def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Path) -> None:
+    origin_dir, pre_sha = _make_clonable_repo(tmp_path)
+    repo = RepoSpec(
+        repo_id="acme__widgets",
+        url=str(origin_dir),
+        pre_sha=pre_sha,
+        post_sha=pre_sha,
+        python_version="3.11",
+        install_cmd=("pip", "install", "."),
+        test_cmd=("pytest", "-q"),
+        baseline=_baseline(frozenset({"t.py::test_a"})),
+    )
+    config = _config()
+    store = ResultStore(tmp_path / "results.db")
+    resume = ResumeContext(store=store, corpus_sha="deadbeef")
+
+    first = run_corpus(
+        [repo],
+        work_root=tmp_path / "work",
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=config,
+        resume=resume,
+    )
+    assert len(first) == 1
+    assert store.has_result(repo.repo_id, config_hash(config), "deadbeef") is True
+
+    # a second call must NOT reach checkout_pre_sha again -- point url at a dead path so
+    # a real re-clone attempt would raise, proving the skip (not a lucky re-clone) is why
+    # this returns successfully.
+    dead_repo = replace(repo, url="https://example.invalid/does/not/exist")
+    second = run_corpus(
+        [dead_repo],
+        work_root=tmp_path / "work2",
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=config,
+        resume=resume,
+    )
+    assert second == first

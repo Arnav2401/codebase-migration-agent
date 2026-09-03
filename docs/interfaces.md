@@ -440,9 +440,16 @@ thing, since those axes have no real implementation to back them yet. `eval/metr
 `RepoScore` is renamed `RepoResult` and carries `config: EvalConfig` plus
 `diff_line_jaccard`/`symbol_precision`/`symbol_recall`/`trace_path` as `| None` fields
 (populated by later Phase 5 steps, not yet). `eval/harness.py`'s `run_repo()`/
-`run_corpus()` take `config: EvalConfig` instead of `use_triage: bool`. Still missing from
-the full sketch: resumability, parallelism, the SQLite result store, and the run manifest
-— later Phase 5 steps, built once retrieval/tiers/diff-similarity have real shapes to
-resume/score. `run_repo` also writes real failure text + predicted class to a JSONL
-side-channel — the seed data phase-4-triage.md's "≥100 hand-labelled failures" needed,
-now hand-labelled and closed out (D55/D56).
+`run_corpus()` take `config: EvalConfig` instead of `use_triage: bool`. `run_repo` also
+writes real failure text + predicted class to a JSONL side-channel — the seed data
+phase-4-triage.md's "≥100 hand-labelled failures" needed, now hand-labelled and closed
+out (D55/D56). D62 made `tiers={"T1"}`/`{"T2","T3"}` real arms alongside the full set
+(any other combination still raises `NotImplementedError` — `repair()` fuses T2/T3 into
+one node, so a set naming one but not the other can't be honored). D63 (this step) added
+`eval/store.py`'s `ResultStore`/`ResumeContext` (the SQLite result store, keyed by
+`(repo_id, config_hash, corpus_sha)`, wired into `run_corpus` via its new `resume`
+param) and `eval/manifest.py`'s `RunManifest`/`write_run_manifest` (the run manifest —
+corpus sha256, prompt hashes, model, seed, agent git sha, start/end time). Still missing
+from the full sketch: parallelism over Docker, and the `make eval` CLI entrypoint itself
+(`configs/*.yaml` loading, wiring the manifest write and `ResumeContext` construction
+around a real invocation) — `eval/harness.py`'s module docstring names both explicitly.

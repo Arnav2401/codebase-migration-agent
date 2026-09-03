@@ -1,15 +1,19 @@
 """Phase 5's eval harness (docs/decisions.md D40/D57) — runs the migration loop across
-corpus repos and scores each one via `eval/metrics.py`. Still NOT the full resumable,
-parallel, SQLite-backed harness interfaces.md §8/phase-5-eval.md describe — that's a
-later Phase 5 step, built once `EvalConfig`/`RepoResult` (this step) have real callers.
-`run_repo`/`run_corpus` now take a full `EvalConfig` rather than a bare `use_triage: bool`,
-but only `config.triage` (threaded to `build_migration_graph`), `config.tiers`
-(docs/decisions.md D62 — threaded to `build_migration_graph`'s `enable_t1`, and validated
-against the caller's own `model_client`), and `config.usd_cap_per_repo` (the default
-`BudgetState.usd_cap` when the caller doesn't pass one explicitly) actually affect
-behavior yet — `config.model`/`config.seed` are carried as provenance on the resulting
-`RepoResult`, not yet consumed to construct anything, since the caller already passes a
-live `model_client` object directly.
+corpus repos and scores each one via `eval/metrics.py`. `run_repo`/`run_corpus` now take a
+full `EvalConfig` rather than a bare `use_triage: bool`; `config.triage` (threaded to
+`build_migration_graph`), `config.tiers` (docs/decisions.md D62 — threaded to
+`build_migration_graph`'s `enable_t1`, and validated against the caller's own
+`model_client`), and `config.usd_cap_per_repo` (the default `BudgetState.usd_cap` when the
+caller doesn't pass one explicitly) all affect behavior — `config.model`/`config.seed` are
+still carried as provenance on the resulting `RepoResult`, not yet consumed to construct
+anything, since the caller already passes a live `model_client` object directly.
+
+`run_corpus`'s `resume: ResumeContext | None` (docs/decisions.md D63) makes it resumable —
+a `(repo_id, config_hash(config), resume.corpus_sha)` cell already in `resume.store` is
+loaded instead of re-run. Still NOT the full parallel-over-Docker harness
+interfaces.md §8/phase-5-eval.md describe, and there's still no `make eval` CLI entrypoint
+(`configs/*.yaml` loading, the run-manifest write via `eval/manifest.py` around the call) —
+both later Phase 5 steps, separable from resumability itself.
 
 Split for testability (CLAUDE.md: no network in unit tests): `run_repo` takes an
 ALREADY-checked-out `source_root` and a pre-built `image`, so it can be exercised with
@@ -45,6 +49,7 @@ from pmigrate.agent.state import AgentState
 from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.diff_similarity import RepoDiffSimilarity, repo_diff_similarity
 from pmigrate.eval.metrics import RepoResult, score_run
+from pmigrate.eval.store import ResumeContext, config_hash
 from pmigrate.graph.relevance import compute_work_list
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.graph.resolver import resolve_repo
@@ -277,10 +282,17 @@ def run_corpus(
     policy: SandboxPolicy | None = None,
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
+    resume: ResumeContext | None = None,
 ) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
-    stance on a single bad repo."""
+    stance on a single bad repo.
+
+    `resume` (docs/decisions.md D63): when set, a `(repo_id, config_hash, corpus_sha)`
+    cell already in `resume.store` is loaded and returned WITHOUT re-checkout/build/run —
+    the whole point of resumability is skipping that expensive work, not just skipping
+    the scoring at the end. `config_hash` is computed once per repo (not hoisted above the
+    loop) since it's a cheap pure function of `config`, which doesn't change mid-call."""
     results = []
     for repo in specs:
         if repo.baseline is None:
@@ -288,6 +300,15 @@ def run_corpus(
             continue
         if split is not None and repo.split != split:
             continue
+
+        if resume is not None:
+            c_hash = config_hash(config)
+            if resume.store.has_result(repo.repo_id, c_hash, resume.corpus_sha):
+                existing = resume.store.load_result(repo.repo_id, c_hash, resume.corpus_sha)
+                if existing is not None:
+                    log.info("harness.skip_already_scored", repo_id=repo.repo_id)
+                    results.append(existing)
+                    continue
 
         repo_root = work_root / repo.repo_id
         source_root = repo_root / "source"
@@ -325,6 +346,9 @@ def run_corpus(
         except Exception as e:
             log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
             continue
+
+        if resume is not None:
+            resume.store.save_result(result, resume.corpus_sha, written_at=time.time())
 
         results.append(result)
         log.info(
