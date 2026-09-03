@@ -33,6 +33,7 @@ from pmigrate.agent.repair import (
     find_related_files,
     repair_system_prompt,
 )
+from pmigrate.agent.retrieval import Retrieval
 from pmigrate.agent.state import AgentState, Edit, RepairAttempt, RepairOutcome
 from pmigrate.codemod.engine import apply_rules
 from pmigrate.codemod.rules import ALL_RULES
@@ -120,6 +121,7 @@ def build_migration_graph(
     model_client: ModelClient | None = None,
     no_progress_threshold: int = 2,
     use_triage: bool = True,
+    retrieval: Retrieval | None = None,
 ) -> Any:
     # Any: langgraph's CompiledStateGraph is generic over 4 type params callers never
     # interact with beyond .invoke() — parametrizing it precisely here would add real
@@ -136,6 +138,11 @@ def build_migration_graph(
     # on any failure regardless of whether it's already known-broken at baseline. That
     # pre-existing fallback path is exactly why `collect_failure_texts` was kept in
     # `agent/repair.py` rather than deleted once D38 stopped calling it directly.
+    #
+    # retrieval (docs/decisions.md D60): Phase 5's OTHER ablation axis -- what context
+    # repair() sends alongside the target file. None (the default) preserves the exact
+    # pre-Phase-5 behavior (`find_related_files`'s grep heuristic, D28) unchanged, so
+    # every test that doesn't pass this keeps passing without modification.
     no_progress = NoProgressDetector(repeat_threshold=no_progress_threshold)
     classifier = RuleBasedClassifier()
 
@@ -335,7 +342,8 @@ def build_migration_graph(
             return {"repair_attempts": [*state.repair_attempts, _record("no_target")]}
 
         target_before = (overlay_root / target_path).read_text()
-        related_paths = find_related_files(target_path, target_before, overlay_root)
+        find_related = retrieval.related_files if retrieval is not None else find_related_files
+        related_paths = find_related(target_path, target_before, overlay_root)
         paths = (target_path, *related_paths)
         before_by_path = {p: (overlay_root / p).read_text() for p in paths}
         prompt = build_repair_prompt(before_by_path, failure_texts)

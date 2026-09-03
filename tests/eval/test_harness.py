@@ -3,8 +3,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
+from pmigrate.agent.retrieval import GraphRetrieval, WholefileRetrieval
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.harness import run_repo
+from pmigrate.eval.harness import _build_retrieval, run_repo
 from pmigrate.types import (
     BaselineResult,
     ImageRef,
@@ -209,3 +210,15 @@ def test_run_repo_routes_repair_through_diagnosis_when_use_triage_is_true(
     assert len(fake_model.calls) == 1
     assert result.usd_spent == 0.02
     assert result.full_green is True
+
+
+def test_build_retrieval_maps_graph_config_to_graph_retrieval() -> None:
+    retrieval = _build_retrieval(_config(), repo_id="acme__widgets")
+    assert isinstance(retrieval, GraphRetrieval)
+    assert retrieval.repo_id == "acme__widgets"
+
+
+def test_build_retrieval_maps_wholefile_config_to_wholefile_retrieval() -> None:
+    config = EvalConfig(name="test", model="fake", retrieval="wholefile")
+    retrieval = _build_retrieval(config, repo_id="acme__widgets")
+    assert isinstance(retrieval, WholefileRetrieval)

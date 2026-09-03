@@ -2,12 +2,19 @@
 
 The full field set is settled now -- every arm phase-5-eval.md names needs SOME identifier
 for `retrieval`/`tiers`, and the shape is already agreed in interfaces.md -- but only
-`model`/`triage`/`seed`/`usd_cap_per_repo` are actually wired into behavior yet.
-`retrieval`/`tiers` exist so a config can be constructed and referenced meaningfully in
-results and run manifests going forward; requesting anything other than today's implicit
-values raises `NotImplementedError` rather than silently running the wrong thing. Each
-gets built out (a real `Retrieval` protocol, T1/T2/T3 gating in `agent/graph.py`) in its
-own later step, not guessed at here.
+`model`/`triage`/`seed`/`usd_cap_per_repo`/`retrieval` (as of docs/decisions.md D60,
+`"graph"` and `"wholefile"` only) are actually wired into behavior. `tiers` still exists
+only so a config can be constructed and referenced meaningfully in results and run
+manifests going forward; requesting anything but the full T1+T2+T3 set raises
+`NotImplementedError` rather than silently running the wrong thing -- T1/T2/T3 gating in
+`agent/graph.py` is its own later step, not guessed at here. `retrieval="embedding"` is
+gated the same way: no embedding/vector infrastructure exists in this project yet, and
+picking a provider is a real decision on its own, not something to default silently.
+
+`RetrievalKind` (this module) is a plain string-literal type -- deliberately NOT named
+`Retrieval`, which is `agent/retrieval.py`'s actual behavioral Protocol (`related_files`).
+Matches this codebase's own `SymbolKind`/`EdgeKind` naming convention for "a literal tag,
+not a class with behavior."
 """
 
 from __future__ import annotations
@@ -15,27 +22,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Retrieval = Literal["graph", "embedding", "wholefile"]
+RetrievalKind = Literal["graph", "embedding", "wholefile"]
 Tier = Literal["T1", "T2", "T3"]
 
 _ALL_TIERS: frozenset[Tier] = frozenset({"T1", "T2", "T3"})
+_IMPLEMENTED_RETRIEVAL_KINDS: frozenset[RetrievalKind] = frozenset({"graph", "wholefile"})
 
 
 @dataclass(frozen=True)
 class EvalConfig:
     name: str
     model: str
-    retrieval: Retrieval = "graph"
+    retrieval: RetrievalKind = "graph"
     tiers: frozenset[Tier] = field(default_factory=lambda: _ALL_TIERS)
     triage: bool = True
     seed: int = 0
     usd_cap_per_repo: float = 5.0
 
     def __post_init__(self) -> None:
-        if self.retrieval != "graph":
+        if self.retrieval not in _IMPLEMENTED_RETRIEVAL_KINDS:
             raise NotImplementedError(
-                f"retrieval={self.retrieval!r} is not implemented yet -- only 'graph' "
-                "(the Phase 1 CodeGraph-backed work_list) runs today"
+                f"retrieval={self.retrieval!r} is not implemented yet -- only "
+                f"{sorted(_IMPLEMENTED_RETRIEVAL_KINDS)} run today"
             )
         if self.tiers != _ALL_TIERS:
             raise NotImplementedError(

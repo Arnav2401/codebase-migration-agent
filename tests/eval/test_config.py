@@ -16,7 +16,13 @@ def test_triage_off_config_constructs_fine() -> None:
     assert config.triage is False
 
 
-def test_non_graph_retrieval_raises_not_implemented() -> None:
+def test_wholefile_retrieval_config_constructs_fine() -> None:
+    # docs/decisions.md D60: wholefile joined graph as a real, implemented retrieval kind
+    config = EvalConfig(name="wholefile", model="gemini-3.6-flash", retrieval="wholefile")
+    assert config.retrieval == "wholefile"
+
+
+def test_embedding_retrieval_raises_not_implemented() -> None:
     with pytest.raises(NotImplementedError, match="retrieval"):
         EvalConfig(name="embedding", model="gemini-3.6-flash", retrieval="embedding")
 

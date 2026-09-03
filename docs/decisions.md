@@ -2519,6 +2519,60 @@ must be the new code's fault."
 
 ---
 
+## D60 — Retrieval protocol: `graph` wires in the unused `neighbourhood`, `wholefile` is new
+
+**Alternatives:** widen `find_related_files`'s own signature with a mode flag instead of a
+new protocol; make `retrieval` a required parameter on `build_migration_graph` (breaking
+every existing caller); route `wholefile`'s file-relevance signal through a new heuristic
+instead of reusing `graph/relevance.py`'s `find_pydantic_model_classes`.
+
+**Why:** research before writing anything found that the REAL current "retrieval"
+mechanism repair() uses is `agent/repair.py`'s `find_related_files` — a name-based grep
+heuristic, not graph-based at all (D28 explicitly rejected wiring real graph traversal
+there at the time). Meanwhile `graph/protocol.py`'s `CodeGraph.neighbourhood` — a ranked
+BFS with budget truncation, fully implemented and tested in both backends — has never
+been called anywhere outside its own test file; its own docstring already says "this is
+the function Phase 5's retrieval ablation swaps out." A mode flag on `find_related_files`
+was rejected because the three arms are genuinely different algorithms (a grep heuristic,
+a graph BFS, a budget-truncated file dump), not three branches of one function — a
+`Retrieval` protocol (matching `ModelClient`/`Sandbox`'s existing pattern) keeps each
+implementation independently testable, the way `agent/repair.py`'s helper functions
+already are. A required `retrieval` parameter was rejected as unnecessary breakage:
+`retrieval: Retrieval | None = None` falling back to the exact pre-D60 `find_related_files`
+behavior means every existing test in `test_graph.py` keeps passing completely unmodified.
+Inventing a new file-relevance heuristic for `wholefile` was rejected once
+`find_pydantic_model_classes` turned out to already compute exactly "is this file part of
+the migration" for `compute_work_list`'s own use — reusing it is the same "single source
+of truth" argument extended to relevance detection, not just metric formulas.
+
+**Fixed by** `agent/retrieval.py`: the `Retrieval` protocol (`related_files(target_path,
+target_before, repo_root) -> tuple[str, ...]`, exactly matching `find_related_files`'s own
+shape), `GraphRetrieval` (re-ingests a fresh `InMemoryCodeGraph` per call — `repo_root`'s
+content changes between `repair()` iterations, so a cached graph would go stale — seeds
+`neighbourhood` from the target file's own MODULE symbol rather than one class, since a
+target FILE is what repair() actually wants context for), and `WholefileRetrieval` (every
+pydantic-touching file, truncated via the SAME `token_budget.truncate_to_budget`
+`GraphRetrieval` uses, by representing each whole file as a placeholder `SymbolRef`
+spanning its full line range). `EvalConfig.retrieval` (D57) now accepts both real kinds;
+`embedding` still raises `NotImplementedError` — no vector/embedding library exists in
+this project yet, and picking a provider is its own decision, not bundled into this one.
+
+Also renamed `eval/config.py`'s `Retrieval` type alias to `RetrievalKind` mid-build: it's
+a plain string-literal tag, and `agent/retrieval.py`'s actual behavioral Protocol needed
+the unqualified `Retrieval` name more — matching this codebase's own `SymbolKind`/
+`EdgeKind` convention for "a literal tag, not a class with behavior," caught before both
+names would need importing into the same file (`eval/harness.py`) and colliding for real.
+
+**Interview:** "The most interesting part of this wasn't writing the new retrieval
+strategies — it was discovering that half the 'graph retrieval' work was already done and
+sitting unused. `neighbourhood`'s own docstring told me what it was for before I'd even
+decided how to build it; the actual task was wiring it into a loop that had grown a
+completely different, ungraph-based heuristic in its place while nobody was looking. That's
+a real, common shape for this kind of thing: the interface was designed for this before the
+implementation existed to fill it, and the fill got skipped, not forgotten."
+
+---
+
 ## Template
 
 ```

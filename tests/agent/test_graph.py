@@ -44,6 +44,21 @@ class FakeSandbox:
         return response
 
 
+@dataclass
+class FakeRetrieval:
+    """Test double for the Retrieval protocol (agent/retrieval.py) — a scripted answer,
+    recording every call, so a test can prove repair() actually calls the INJECTED
+    strategy (and uses its answer) rather than silently falling back to
+    find_related_files."""
+
+    response: tuple[str, ...]
+    calls: list = field(default_factory=list)
+
+    def related_files(self, target_path, target_before, repo_root):  # type: ignore[no-untyped-def]
+        self.calls.append((target_path, target_before, repo_root))
+        return self.response
+
+
 def _repo(baseline: BaselineResult | None = None) -> RepoSpec:
     return RepoSpec(
         repo_id="acme__widgets",
@@ -389,6 +404,47 @@ def test_repair_applies_a_multi_file_response_end_to_end(tmp_path: Path) -> None
     assert any(e.unit_module == "app.base" and e.source == "T2" for e in result["edits"])
     assert [a.outcome for a in result["repair_attempts"]] == ["applied"]
     assert result["repair_attempts"][0].usd_cost == 0.01
+
+
+def test_repair_uses_the_injected_retrieval_strategy_instead_of_find_related_files(
+    tmp_path: Path,
+) -> None:
+    # docs/decisions.md D60: an injected Retrieval must actually drive what context
+    # repair() sends -- not just get called and then be ignored in favor of the old
+    # find_related_files heuristic.
+    source_root, overlay_root = _setup_source(tmp_path, content="x = 1\n")  # T1 can't fix this
+    (source_root / "app" / "extra_context.py").write_text("EXTRA_MARKER = 1\n")
+    traceback = "app/models.py:1: in <module>\nE   AssertionError: boom"
+    sandbox = FakeSandbox(responses=[_failed_run(traceback=traceback), _passed_run()])
+    fake_model = FakeModelClient(
+        responses=[
+            ModelResponse(
+                text="File: app/models.py\n```python\nx = 2\n```\n",
+                usd_cost=0.01,
+                tokens_in=5,
+                tokens_out=5,
+            )
+        ]
+    )
+    fake_retrieval = FakeRetrieval(response=("app/extra_context.py",))
+
+    graph = build_migration_graph(
+        sandbox=sandbox,
+        image=_image(),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        policy=SandboxPolicy(),
+        model_client=fake_model,
+        retrieval=fake_retrieval,
+    )
+    state = AgentState(repo=_repo(), work_list=[[_unit()]])
+
+    graph.invoke(state)
+
+    assert len(fake_retrieval.calls) == 1
+    assert fake_retrieval.calls[0][0] == "app/models.py"
+    _system, prompt = fake_model.calls[0]
+    assert "EXTRA_MARKER" in prompt  # the injected strategy's answer reached the prompt
 
 
 def test_repair_records_a_rejected_attempt_when_nothing_the_model_proposes_lands(
