@@ -140,6 +140,26 @@ diagnosis can never register as "fixed" even when it obviously worked. Read `app
 fixed=0` here as "this class isn't currently measurable by this join," not "this class
 fails."
 
+## Classifier accuracy: 96.8% (D55/D56)
+
+`docs/phase-4-triage.md`'s last unmeasured acceptance criterion: ≥85% on ≥100
+hand-labelled real failures. All 411 raw failures in `triage_failures_dev.jsonl` are now
+labelled (`tests/fixtures/triage/labelled_dev.jsonl`, via `pmigrate triage label`'s
+group-based hand-labelling session — D55) and continuously checked by
+`tests/eval/test_classifier_regression.py`, which re-classifies every entry fresh through
+the real `RuleBasedClassifier` (not a stale stored prediction) and asserts ≥0.85.
+
+The path here is worth reading, not just the final number: the raw pass was 72.5%, a real
+fail. Investigating before accepting that number found 20 of the "misses" were the
+*labelling* tool's fault, not the classifier's — `PREEXISTING` depends on baseline
+membership the tool never showed a human labeller, and one group-based shortcut (D55's own
+stated risk) genuinely merged two unrelated failures under one label. Corrected, that left
+76.9% and three clean, evidenced gaps — `.model_copy()`/`.model_dump()` on a non-model
+value (the single biggest miss, 45 failures), two more class-definition-time exception
+shapes, and one overly-narrow `ImportError` pattern. Four new rules in `triage/rules.py`
+later: **96.8%** (398/411), with two known, accepted residual gaps documented in D56
+rather than chased with overfit regexes. Full trace: docs/decisions.md D56.
+
 ## What's NOT here yet
 
 - **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — hung on
@@ -147,10 +167,6 @@ fails."
   manually. Root-caused since (D53: an uncapped `Retry-After` sleep in
   `GroqModelClient._post_with_retry`, now fixed) — a rerun should complete normally, just
   hasn't been done yet for this writeup.
-- **Classifier accuracy on a hand-labelled set.** `docs/results/triage_failures_dev.jsonl`
-  has real residual failures with predicted classes and full traceback text, but nothing
-  has been hand-labelled against it yet, and it's overwritten each run rather than
-  accumulated.
 - **A same-model fix-success table.** The real, automated table above (D51/D52) exists
   now, but only for a `use_triage=True`-only Gemini run — Groq's own equivalent needs a
   clean run once its daily token quota resets, and Gemini's own OFF arm needs its quota
@@ -179,6 +195,7 @@ fails."
   once at full completion, which didn't happen because the `opendataeditor` OFF cell was
   killed mid-run).
 - Residual failures with full text: `docs/results/triage_failures_dev.jsonl`
+- Hand-labelled ground truth (411 real failures, D55/D56): `tests/fixtures/triage/labelled_dev.jsonl`
 - Gemini fix-success-table run (scratch, not committed): `corpus_run_gemini_results.json`
   via `scratchpad/run_corpus_gemini.py` — the same run also confirmed D48's original
   Gemini free-tier finding live a second time: `use_triage=True` got 6 of 7 repos through

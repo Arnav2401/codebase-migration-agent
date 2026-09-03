@@ -13,17 +13,30 @@ orchestration layer (agent/graph.py, alongside `NoProgressDetector`, which alrea
 state across iterations), not here.
 
 Each rule maps to a real failure shape already hit and documented in docs/decisions.md:
-  - IMPORT_ERROR:       D19/D20 — `PydanticImportError`, `BaseSettings` import failures
+  - IMPORT_ERROR:       D19/D20/D56 — `PydanticImportError`, `BaseSettings` import
+                        failures, and (D56) any "ImportError: cannot import name X from Y"
+                        regardless of source module Y (a repo's own package can fail to
+                        import as a collateral symptom of a pydantic issue deeper in its
+                        chain, without the word "pydantic" in the shallow error text)
   - THIRD_PARTY_PIN:    D26     — `aiomcache` (any non-pydantic `ModuleNotFoundError`)
   - CLASS_DEF_ERROR:    pydantic's own documented error taxonomy (PydanticUserError at
-                        class-definition time) — a real, distinct exception type from
-                        PydanticImportError, not yet hit in THIS corpus but cheap and
-                        unambiguous to detect by exception name alone
+                        class-definition time), plus two D56 additions found via the D55
+                        hand-labelling pass: pydantic v1's own `find_validators`
+                        `RuntimeError` (not `PydanticUserError`) for a type with no
+                        validator and no `arbitrary_types_allowed`, and FastAPI's own
+                        `FastAPIError` wrapping the underlying `PydanticSchemaGenerationError`
+                        without ever naming it directly
   - REMOVED_API:        matches T1's own rule names (`.dict()`/`.json()`/`parse_obj`/
                         `__fields__`) — see the strategy note below for why this is no
-                        longer "re-run the codemod"
+                        longer "re-run the codemod" — plus (D56) pydantic v2's
+                        `_getattr_migration` raising for a removed v1 name accessed as a
+                        module/type attribute (`pydantic.fields.ModelField`) rather than
+                        an instance method
   - VALIDATION_BEHAVIOUR: D20/D26/D35 — any ValidationError not otherwise classified;
-                        the true "needs semantic judgment" class
+                        the true "needs semantic judgment" class — plus (D56) the single
+                        biggest gap the D55 hand-labelling pass found: `.model_copy()`/
+                        `.model_dump()` called on a value that was never actually a
+                        Pydantic model (a naive T1/T2 rewrite applied to the wrong type)
 
 Rules are tried in order; the first match wins. `PREEXISTING` is NOT one of these regex
 rules — it depends on baseline data, not the failure text, and is checked in
@@ -76,14 +89,32 @@ _RULES: tuple[ClassificationRule, ...] = (
     ClassificationRule(
         cls=FailureClass.IMPORT_ERROR,
         strategy=_STRATEGY_FIX_IMPORT,
-        pattern=re.compile(
-            r"PydanticImportError|ImportError: cannot import name '\w+' from 'pydantic'"
-        ),
+        pattern=re.compile(r"PydanticImportError|ImportError: cannot import name '\w+' from '\w+'"),
     ),
     ClassificationRule(
         cls=FailureClass.CLASS_DEF_ERROR,
         strategy=_STRATEGY_FIX_CLASS_DEF,
         pattern=re.compile(r"pydantic\.errors\.PydanticUserError"),
+    ),
+    # docs/decisions.md D56: found via the D55 hand-labelling pass -- pydantic v1's OWN
+    # `find_validators` raises a plain RuntimeError (not PydanticUserError) at
+    # class-definition time when a field's type has no known validator and
+    # `arbitrary_types_allowed` isn't set. Still class-definition-time, just a different
+    # exception type than the rule above catches.
+    ClassificationRule(
+        cls=FailureClass.CLASS_DEF_ERROR,
+        strategy=_STRATEGY_FIX_CLASS_DEF,
+        pattern=re.compile(r"RuntimeError: no validator found for .*arbitrary_types_allowed"),
+    ),
+    # docs/decisions.md D56: FastAPI's own create_response_field wraps a pydantic
+    # PydanticSchemaGenerationError in its own FastAPIError before re-raising -- the
+    # literal string "PydanticUserError"/"PydanticSchemaGenerationError" never appears in
+    # the final message, only FastAPI's paraphrase of it. Still a class-definition-time
+    # failure (raised while FastAPI is building the route's response model).
+    ClassificationRule(
+        cls=FailureClass.CLASS_DEF_ERROR,
+        strategy=_STRATEGY_FIX_CLASS_DEF,
+        pattern=re.compile(r"fastapi\.exceptions\.FastAPIError: Invalid args for response field"),
     ),
     ClassificationRule(
         cls=FailureClass.REMOVED_API,
@@ -92,10 +123,31 @@ _RULES: tuple[ClassificationRule, ...] = (
             r"has no attribute '(dict|json|parse_obj|parse_raw|__fields__|update_forward_refs)'"
         ),
     ),
+    # docs/decisions.md D56: pydantic v2's own `_getattr_migration` raises this directly
+    # for a handful of removed v1 names accessed as module/type attributes rather than
+    # instance methods (`pydantic.fields.ModelField`, `pydantic.fields` itself) -- same
+    # "removed in v2" shape as the rule above, different attribute-access form.
+    ClassificationRule(
+        cls=FailureClass.REMOVED_API,
+        strategy=_STRATEGY_MISSING_T1_RULE,
+        pattern=re.compile(r"module 'pydantic(\.\w+)?' has no attribute '(ModelField|fields)'"),
+    ),
     ClassificationRule(
         cls=FailureClass.VALIDATION_BEHAVIOUR,
         strategy=_STRATEGY_SEMANTIC_REPAIR,
         pattern=re.compile(r"pydantic_core\._pydantic_core\.ValidationError"),
+    ),
+    # docs/decisions.md D56: the single biggest gap the D55 hand-labelling pass found (45
+    # of 411 raw failures) -- a naive T1/T2 rewrite applies `.model_copy()`/`.model_dump()`
+    # to a value that was never actually a Pydantic model (a plain dict, a LangChain
+    # Document, a multiprocessing Manager proxy). Routed to VALIDATION_BEHAVIOUR rather
+    # than a new class: it needs the same semantic judgment (what SHOULD this value be,
+    # and does the surrounding code's assumption even hold) as any other
+    # ValidationError-shaped case, not a mechanical codemod re-run.
+    ClassificationRule(
+        cls=FailureClass.VALIDATION_BEHAVIOUR,
+        strategy=_STRATEGY_SEMANTIC_REPAIR,
+        pattern=re.compile(r"has no attribute '(model_copy|model_dump|model_dump_json)'"),
     ),
 )
 

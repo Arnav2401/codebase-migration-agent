@@ -2302,6 +2302,60 @@ into 'labelling didn't happen.'"
 
 ---
 
+## D56 — Real hand-labelling result: 72.5% raw, 76.9% corrected, 96.8% after 4 new rules
+
+**Alternatives:** report the raw 72.5% number as-is; chase 100% by adding a rule narrow
+enough to match every remaining case in this specific 411-failure dataset.
+
+**Why:** running D55's tool against all 411 raw failures gave `classifier_accuracy` =
+72.5% — a real fail against `docs/phase-4-triage.md`'s 85% threshold. Investigating BEFORE
+accepting that number surfaced two things worth separating from genuine classifier gaps:
+
+1. **18 mislabels were the labeller's fault, not the classifier's.** `PREEXISTING` is
+   determined purely by `node_id in baseline.failed` (`grouping.py`'s `_classify_one`) —
+   it never looks at failure text at all. D55's tool only ever showed traceback text, so a
+   human labelling blind had zero way to know a node also failed at the v1 baseline.
+   Checked against `corpus/manifest.json`'s real captured baselines: all 18 `predicted=
+   preexisting` "mismatches" (`iscc-core`'s `DataURL` case, `kor`'s `html.py` case) were
+   node_ids genuinely present in `baseline.failed` — the classifier was right, the hand
+   label was wrong. Corrected in `labelled_dev.jsonl` directly, not by touching
+   classification code.
+2. **2 more mislabels were D55's own stated group-shortcut risk, materializing for
+   real.** A `(cls=unknown, frame=None)` group contained BOTH a real `ImportError` AND an
+   unrelated multiprocessing `AssertionError` (`BaseProcess.is_alive`) that happened to
+   share the same "no frame, unknown class" key — labelling from one representative
+   sample applied `import_error` to both. Corrected these 2 back to `unknown`.
+
+That left 76.9% — genuinely below threshold, but now three CLEAN gaps, each the exact
+"every UNKNOWN is a candidate new rule" case `docs/phase-4-triage.md` anticipated:
+`.model_copy()`/`.model_dump()` on a non-model value (45 failures — the single biggest
+gap), two more class-definition-time exception shapes `rules.py` didn't recognize (a bare
+`RuntimeError` from pydantic v1's own `find_validators`, and FastAPI's `FastAPIError`
+wrapping a `PydanticSchemaGenerationError` without ever naming it), and one
+non-pydantic-scoped `ImportError` (a repo's own package failing to import as a collateral
+symptom of a pydantic issue deeper in its chain). Four new rules later: 96.8%.
+
+Rejected chasing 100%: the fix left two known residual gaps (9 `SyncManager.model_dump()`
+failures now WRONGLY caught by the new `model_copy`/`model_dump` rule — a real, accepted
+false-positive cost of fixing the other 45; and 4 `TypeError: 'X' object is not
+subscriptable` failures from a v1-style `mode="after"` validator that still read UNKNOWN).
+Both were left alone deliberately: narrowing the `model_copy` regex to exclude
+`SyncManager` specifically would be overfitting to this exact dataset, and a bare
+"object is not subscriptable" pattern is generic enough that adding it on the strength of
+ONE observed instance would be exactly the "inventing a regex for a failure shape never
+actually seen" `rules.py`'s own docstring already argues against — one real instance of a
+very generic-looking error isn't yet "real evidence" in the sense that phrase means.
+
+**Interview:** "The raw number said 'fail,' and it would have been easy to stop there or,
+worse, to quietly patch the labels until the number looked better. Instead I traced every
+mismatch back to its actual cause before touching anything — and two different kinds of
+'mismatch' turned out to be my own tool's blind spots, not the classifier's. Only after
+separating those out did I have a number I trusted enough to act on, and only then did
+fixing the classifier mean fixing four real, evidenced gaps instead of four regexes
+reverse-engineered from a spreadsheet."
+
+---
+
 ## Template
 
 ```
