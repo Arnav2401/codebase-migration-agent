@@ -2573,6 +2573,59 @@ implementation existed to fill it, and the fill got skipped, not forgotten."
 
 ---
 
+## D61 — Embedding provider: local `sentence-transformers`, not a paid API
+
+**Alternatives:** OpenAI's embeddings API (`text-embedding-3-small` — cheap, and `openai`
+is already a listed core dependency, just unused); Gemini's embedding endpoint (reuses
+the `GEMINI_API_KEY` already in `.env`, no new key needed at all).
+
+**Why:** by the time this decision came up, this project had already hit THREE separate
+provider-quota walls in one session — Gemini's free tier trickle-refilling unpredictably
+rather than resetting daily (D48), Groq's `openai/gpt-oss-120b` daily token quota fully
+exhausted from corpus-run volume (D53's investigation), and the general cost/quota
+overhead of tracking two paid providers at once. The `embedding` retrieval arm's workload
+is inherently high-volume — embedding every symbol across every repo in the corpus,
+potentially many times per eval run — exactly the shape of workload that burns through a
+free tier fast or racks up real (if individually small) per-token cost across a full run.
+Gemini's embedding endpoint was rejected specifically because THIS project already proved
+that exact free tier unreliable this same day; reusing an already-untrustworthy quota for
+a NEW high-volume use case would just reproduce the same failure mode faster. OpenAI's
+was rejected as the more defensible paid option but still a real cost/quota unknown with
+zero verified usage in this project so far, versus a local model with zero marginal cost
+and zero quota ceiling at all.
+
+**Fixed by** `agent/retrieval.py`'s `SentenceTransformerEmbedder` (`all-MiniLM-L6-v2`,
+lazily imported inside `embed()` — most of this project has no reason to force a
+multi-hundred-MB `torch` install) and `EmbeddingRetrieval` (chunks by symbol — the same
+function/class/method boundaries `GraphRetrieval`/`WholefileRetrieval` already use, not a
+separately invented line/character chunker — ranks by cosine similarity computed in plain
+Python, no numpy, and truncates via the SAME `token_budget.truncate_to_budget` the other
+two arms use). `sentence-transformers` lives in `pyproject.toml`'s new `embedding` extra
+(`pip install -e '.[embedding]'`), NOT `make setup`'s default `[dev]` extras — verified
+live end-to-end with the real model (correctly ranked a semantically similar function
+above an unrelated one), then uninstalled again from this session's own dev venv to keep
+it matching the project's actually-documented standard environment, not a session-local
+drift only this machine would have.
+
+**Testability, the same real-vs-fake split `ModelClient`/`Sandbox` already establish:**
+`Embedder` is a Protocol, injected into `EmbeddingRetrieval` rather than constructed
+internally — a real `SentenceTransformerEmbedder` in production, a scripted `FakeEmbedder`
+in tests. Loading a real model needs network on first use (a HuggingFace download), which
+CLAUDE.md's "no network in unit tests" rule rules out for the default suite; all 378 tests
+(including every `EmbeddingRetrieval` test) pass with `sentence-transformers` completely
+uninstalled, proving the chunking/ranking logic itself carries zero hidden dependency on
+the heavy optional package — only the one real `Embedder` implementation does.
+
+**Interview:** "This was a case where the 'obvious' choice — use an existing paid API,
+since the dependency is already listed — was wrong given what the SAME session had
+already shown about paid-provider reliability. The right question wasn't 'which provider
+is cheapest,' it was 'which failure mode has this project already proven it can't
+tolerate more of today' — and a fourth quota crisis on the exact axis (embedding volume)
+most likely to trigger one was the answer that ruled out both paid options before price
+even mattered."
+
+---
+
 ## Template
 
 ```

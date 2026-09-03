@@ -22,9 +22,18 @@ def test_wholefile_retrieval_config_constructs_fine() -> None:
     assert config.retrieval == "wholefile"
 
 
-def test_embedding_retrieval_raises_not_implemented() -> None:
+def test_embedding_retrieval_config_constructs_fine() -> None:
+    # docs/decisions.md D61: embedding joined graph/wholefile as a real, implemented
+    # retrieval kind (local sentence-transformers, an optional dependency -- constructing
+    # the config itself needs no heavy import at all, only actually calling
+    # EmbeddingRetrieval.related_files does).
+    config = EvalConfig(name="embedding", model="gemini-3.6-flash", retrieval="embedding")
+    assert config.retrieval == "embedding"
+
+
+def test_unimplemented_retrieval_kind_raises_not_implemented() -> None:
     with pytest.raises(NotImplementedError, match="retrieval"):
-        EvalConfig(name="embedding", model="gemini-3.6-flash", retrieval="embedding")
+        EvalConfig(name="bad", model="gemini-3.6-flash", retrieval="not_a_real_kind")  # type: ignore[arg-type]
 
 
 def test_partial_tier_set_raises_not_implemented() -> None:

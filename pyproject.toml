@@ -32,6 +32,15 @@ dev = [
     "pre-commit>=3.7",
     "pytest-cov>=5.0",
 ]
+# docs/decisions.md D61: local embeddings for Phase 5's "embedding" retrieval arm --
+# chosen over a paid provider (OpenAI/Gemini) specifically to avoid a fourth
+# provider-quota crisis after Gemini's trickle-refill (D48) and Groq's daily-token
+# exhaustion (D53) both hit this project the same day. Optional, not core: most of this
+# project (T1, triage, the graph/wholefile retrieval arms) has no reason to force a
+# multi-hundred-MB torch install. `pip install -e '.[embedding]'` to use it.
+embedding = [
+    "sentence-transformers>=2.2",
+]
 
 [project.scripts]
 pmigrate = "pmigrate.cli:app"

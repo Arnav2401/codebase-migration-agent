@@ -1,7 +1,6 @@
 """Phase 5's retrieval ablation (docs/phase-5-eval.md): what context does `repair()`
-include alongside the target file when building its prompt? Three arms; `graph` and
-`wholefile` here, `embedding` a separate, later step -- no embedding/vector library exists
-in this project yet, and picking a provider is a real decision on its own.
+include alongside the target file when building its prompt? All three arms live here now
+(docs/decisions.md D60/D61).
 
 `Retrieval.related_files` matches `agent/repair.py`'s `find_related_files` exactly in
 shape (same three params, same "extra file paths, not including target_path" contract) --
@@ -12,14 +11,15 @@ test keeps working unchanged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from pmigrate.graph.ir import ParsedClass
 from pmigrate.graph.memory_store import InMemoryCodeGraph
 from pmigrate.graph.relevance import find_pydantic_model_classes
 from pmigrate.graph.repo_files import read_py_files
-from pmigrate.graph.resolver import resolve_repo
+from pmigrate.graph.resolver import ResolvedRepo, resolve_repo
 from pmigrate.graph.token_budget import truncate_to_budget
 from pmigrate.types import RepoSpec, SymbolKind, SymbolRef
 
@@ -126,3 +126,175 @@ class WholefileRetrieval:
             )
 
         return tuple(c.path for c in truncate_to_budget(candidates, self.budget_tokens))
+
+
+class Embedder(Protocol):
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """One vector per input text, same order in, same order out."""
+        ...
+
+
+@dataclass
+class SentenceTransformerEmbedder:
+    """docs/decisions.md D61: local, real embeddings via `sentence-transformers`
+    (`all-MiniLM-L6-v2` by default) -- no API key, no quota, no per-call cost, works
+    offline, chosen specifically to avoid a FOURTH provider-quota crisis after Gemini's
+    trickle-refill (D48) and Groq's daily-token exhaustion (D53) both hit this project the
+    same day. `sentence-transformers` (which pulls in `torch`) is an OPTIONAL dependency
+    (`pyproject.toml`'s `embedding` extra, `pip install -e .[embedding]`) -- most of this
+    project (T1, triage, the other two retrieval arms) has no reason to force a
+    multi-hundred-MB install, so the import is lazy, inside `embed()`, not at module load
+    time; only actually constructing and calling this specific class pays that cost."""
+
+    model_name: str = "all-MiniLM-L6-v2"
+    _model: object | None = field(default=None, init=False, repr=False)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if self._model is None:
+            try:
+                import sentence_transformers  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise ImportError(
+                    "sentence-transformers is not installed -- run "
+                    "`pip install -e '.[embedding]'` to use EmbeddingRetrieval"
+                ) from exc
+            self._model = sentence_transformers.SentenceTransformer(self.model_name)
+        embeddings: list[list[float]] = self._model.encode(texts).tolist()  # type: ignore[attr-defined]
+        return embeddings
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Plain Python, no numpy -- keeps this module importable, and `EmbeddingRetrieval`'s
+    chunking/ranking logic unit-testable with a fake `Embedder`, without installing the
+    `embedding` extra at all. Only `SentenceTransformerEmbedder.embed` itself needs the
+    heavy dependency, and only when actually called."""
+    dot: float = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a: float = sum(x * x for x in a) ** 0.5
+    norm_b: float = sum(x * x for x in b) ** 0.5
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(dot / (norm_a * norm_b))
+
+
+def _symbol_chunks(
+    resolved: ResolvedRepo, files: dict[str, bytes], exclude_path: str
+) -> list[tuple[SymbolRef, str]]:
+    """Every class/nested class/method/function across the WHOLE repo as (SymbolRef, own
+    source text) pairs -- the chunking unit `EmbeddingRetrieval` embeds, matching the same
+    symbol boundaries `GraphRetrieval`/`WholefileRetrieval` already operate on rather than
+    a separately invented line/character-based chunker. Lives here, not reused from
+    `eval/diff_similarity.py`'s similarly-shaped `_symbol_ranges`, because that function is
+    file-scoped and range-only (diffing two versions of ONE file); this is repo-scoped and
+    needs each symbol's actual TEXT to embed -- a different problem, not a duplicated one,
+    and `agent/` can't import from `eval/` without inverting this project's layering
+    (`eval/harness.py` already imports FROM `agent/`, never the other way)."""
+    chunks: list[tuple[SymbolRef, str]] = []
+    for module_fqname, module in resolved.modules.items():
+        path = resolved.module_paths[module_fqname]
+        if path == exclude_path:
+            continue
+        lines = files.get(path, b"").decode("utf-8", errors="replace").splitlines()
+
+        def _text_for(start: int, end: int, _lines: list[str] = lines) -> str:
+            return "\n".join(_lines[start - 1 : end])
+
+        def _walk_class(
+            cls: ParsedClass, prefix: str, _path: str = path, _lines: list[str] = lines
+        ) -> None:
+            qualified = f"{prefix}.{cls.name}" if prefix else cls.name
+            for nested in cls.nested_classes:
+                _walk_class(nested, qualified, _path, _lines)
+            for method in cls.methods:
+                chunks.append(
+                    (
+                        SymbolRef(
+                            repo_id="",
+                            fqname=f"{_path}::{qualified}.{method.name}",
+                            kind=SymbolKind.METHOD,
+                            path=_path,
+                            start_line=method.start_line,
+                            end_line=method.end_line,
+                        ),
+                        _text_for(method.start_line, method.end_line, _lines),
+                    )
+                )
+            chunks.append(
+                (
+                    SymbolRef(
+                        repo_id="",
+                        fqname=f"{_path}::{qualified}",
+                        kind=SymbolKind.CLASS,
+                        path=_path,
+                        start_line=cls.start_line,
+                        end_line=cls.end_line,
+                    ),
+                    _text_for(cls.start_line, cls.end_line, _lines),
+                )
+            )
+
+        for cls in module.classes:
+            _walk_class(cls, "")
+        for func in module.functions:
+            chunks.append(
+                (
+                    SymbolRef(
+                        repo_id="",
+                        fqname=f"{path}::{func.name}",
+                        kind=SymbolKind.FUNCTION,
+                        path=path,
+                        start_line=func.start_line,
+                        end_line=func.end_line,
+                    ),
+                    _text_for(func.start_line, func.end_line),
+                )
+            )
+    return chunks
+
+
+@dataclass
+class EmbeddingRetrieval:
+    """docs/phase-5-eval.md's "embedding" arm -- retrieval = cosine similarity over
+    embeddings of each symbol's own source text (one chunk per function/class/method,
+    `_symbol_chunks` above), ranked and truncated to a token budget via the SAME
+    `truncate_to_budget` the other two arms use (comparable budgets across all three, not
+    an arbitrarily different number per arm). Brute-force similarity over a small,
+    in-memory list -- not a real vector database -- since corpus repos here are tens to a
+    few hundred files, well within "a for loop is fine" territory (the same reasoning
+    `graph/memory_store.py`'s own in-memory graph backend already gives for itself).
+
+    `embedder` is injected (docs/decisions.md D61), not constructed internally, matching
+    `ModelClient`/`Sandbox`'s existing real-vs-fake split: a real `SentenceTransformerEmbedder`
+    in production, a scripted fake in tests -- loading a real model needs network on first
+    use (a HuggingFace download), which `CLAUDE.md`'s "no network in unit tests" rule
+    rules out for the default test suite.
+    """
+
+    embedder: Embedder
+    budget_tokens: int = DEFAULT_BUDGET_TOKENS
+
+    def related_files(
+        self, target_path: str, target_before: str, repo_root: Path
+    ) -> tuple[str, ...]:
+        files = read_py_files(repo_root)
+        resolved = resolve_repo(files)
+        chunks = _symbol_chunks(resolved, files, exclude_path=target_path)
+        if not chunks:
+            return ()
+
+        texts = [text for _ref, text in chunks] + [target_before]
+        vectors = self.embedder.embed(texts)
+        query_vector = vectors[-1]
+        chunk_vectors = vectors[:-1]
+
+        ranked = sorted(
+            zip(chunks, chunk_vectors, strict=True),
+            key=lambda pair: -_cosine_similarity(query_vector, pair[1]),
+        )
+        ranked_refs = [ref for (ref, _text), _vec in ranked]
+
+        truncated = truncate_to_budget(ranked_refs, self.budget_tokens)
+        paths: list[str] = []
+        for ref in truncated:
+            if ref.path not in paths:
+                paths.append(ref.path)
+        return tuple(paths)

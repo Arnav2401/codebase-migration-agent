@@ -32,7 +32,13 @@ import structlog
 from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.graph import build_migration_graph
 from pmigrate.agent.model_client import ModelClient
-from pmigrate.agent.retrieval import GraphRetrieval, Retrieval, WholefileRetrieval
+from pmigrate.agent.retrieval import (
+    EmbeddingRetrieval,
+    GraphRetrieval,
+    Retrieval,
+    SentenceTransformerEmbedder,
+    WholefileRetrieval,
+)
 from pmigrate.agent.state import AgentState
 from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.diff_similarity import RepoDiffSimilarity, repo_diff_similarity
@@ -162,16 +168,20 @@ def compute_diff_similarity(
 
 
 def _build_retrieval(config: EvalConfig, repo_id: str) -> Retrieval:
-    """docs/decisions.md D60: constructs the `Retrieval` strategy `config.retrieval`
-    actually names. `EvalConfig.__post_init__` already rejects any kind besides "graph"/
-    "wholefile" at construction time, so the fallback branch here is unreachable in
+    """docs/decisions.md D60/D61: constructs the `Retrieval` strategy `config.retrieval`
+    actually names. `EvalConfig.__post_init__` already rejects any kind besides the three
+    implemented ones at construction time, so the fallback branch here is unreachable in
     practice -- kept as an explicit `ValueError` rather than silently defaulting, so a
     future retrieval kind added to `EvalConfig` without a matching case here fails loudly
-    instead of quietly running the wrong strategy."""
+    instead of quietly running the wrong strategy. Constructing `SentenceTransformerEmbedder`
+    is cheap (no model load) -- it's lazy, inside `embed()` -- so this never pays that cost
+    for a run that doesn't actually pick the "embedding" arm."""
     if config.retrieval == "graph":
         return GraphRetrieval(repo_id=repo_id)
     if config.retrieval == "wholefile":
         return WholefileRetrieval()
+    if config.retrieval == "embedding":
+        return EmbeddingRetrieval(embedder=SentenceTransformerEmbedder())
     raise ValueError(f"no Retrieval implementation wired up for retrieval={config.retrieval!r}")
 
 

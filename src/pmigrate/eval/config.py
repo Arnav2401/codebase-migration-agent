@@ -2,14 +2,15 @@
 
 The full field set is settled now -- every arm phase-5-eval.md names needs SOME identifier
 for `retrieval`/`tiers`, and the shape is already agreed in interfaces.md -- but only
-`model`/`triage`/`seed`/`usd_cap_per_repo`/`retrieval` (as of docs/decisions.md D60,
-`"graph"` and `"wholefile"` only) are actually wired into behavior. `tiers` still exists
-only so a config can be constructed and referenced meaningfully in results and run
-manifests going forward; requesting anything but the full T1+T2+T3 set raises
-`NotImplementedError` rather than silently running the wrong thing -- T1/T2/T3 gating in
-`agent/graph.py` is its own later step, not guessed at here. `retrieval="embedding"` is
-gated the same way: no embedding/vector infrastructure exists in this project yet, and
-picking a provider is a real decision on its own, not something to default silently.
+`model`/`triage`/`seed`/`usd_cap_per_repo`/`retrieval` are actually wired into behavior.
+As of docs/decisions.md D60/D61, all three `retrieval` kinds are real: `"graph"`
+(`agent/retrieval.py`'s `GraphRetrieval`), `"wholefile"` (`WholefileRetrieval`), and
+`"embedding"` (`EmbeddingRetrieval`, local `sentence-transformers` -- an optional
+dependency, `pyproject.toml`'s `embedding` extra). `tiers` still exists only so a config
+can be constructed and referenced meaningfully in results and run manifests going
+forward; requesting anything but the full T1+T2+T3 set raises `NotImplementedError`
+rather than silently running the wrong thing -- T1/T2/T3 gating in `agent/graph.py` is
+its own later step, not guessed at here.
 
 `RetrievalKind` (this module) is a plain string-literal type -- deliberately NOT named
 `Retrieval`, which is `agent/retrieval.py`'s actual behavioral Protocol (`related_files`).
@@ -26,7 +27,9 @@ RetrievalKind = Literal["graph", "embedding", "wholefile"]
 Tier = Literal["T1", "T2", "T3"]
 
 _ALL_TIERS: frozenset[Tier] = frozenset({"T1", "T2", "T3"})
-_IMPLEMENTED_RETRIEVAL_KINDS: frozenset[RetrievalKind] = frozenset({"graph", "wholefile"})
+_IMPLEMENTED_RETRIEVAL_KINDS: frozenset[RetrievalKind] = frozenset(
+    {"graph", "wholefile", "embedding"}
+)
 
 
 @dataclass(frozen=True)
