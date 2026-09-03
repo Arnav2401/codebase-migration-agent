@@ -2,7 +2,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pmigrate.agent.budget import BudgetState
-from pmigrate.agent.graph import _select_repair_target, build_migration_graph
+from pmigrate.agent.graph import (
+    _repair_candidates_in_priority_order,
+    _select_repair_target,
+    build_migration_graph,
+)
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
 from pmigrate.agent.state import AgentState
 from pmigrate.triage.collect import RawFailure
@@ -413,6 +417,30 @@ def test_select_repair_target_returns_none_for_empty_candidates() -> None:
     assert _select_repair_target([]) is None
 
 
+def test_repair_candidates_in_priority_order_returns_all_repairable_candidates_in_order() -> None:
+    # docs/decisions.md D50: repair() needs the FULL ordered list, not just the winner,
+    # so it can fall through past a target-less top candidate.
+    candidates = [
+        _grouped(FailureClass.UNKNOWN),
+        _grouped(FailureClass.VALIDATION_BEHAVIOUR),
+        _grouped(FailureClass.IMPORT_ERROR),
+    ]
+    ordered = _repair_candidates_in_priority_order(candidates)
+    assert [g.diagnosis.cls for g in ordered] == [
+        FailureClass.IMPORT_ERROR,
+        FailureClass.VALIDATION_BEHAVIOUR,
+        FailureClass.UNKNOWN,
+    ]
+
+
+def test_repair_candidates_in_priority_order_excludes_nothing_extra() -> None:
+    candidates = [_grouped(FailureClass.PREEXISTING), _grouped(FailureClass.THIRD_PARTY_PIN)]
+    # PREEXISTING/THIRD_PARTY_PIN aren't in _REPAIR_PRIORITY at all -- repair() filters
+    # these out before calling this, but the ordering function itself should just as
+    # correctly produce an empty list if it's ever handed them anyway.
+    assert _repair_candidates_in_priority_order(candidates) == []
+
+
 def test_repair_only_sends_the_model_the_chosen_diagnosis_failure_text(tmp_path: Path) -> None:
     # docs/decisions.md D38: when two DIFFERENT failure classes are present in the same
     # iteration, repair() must route on the higher-priority one (IMPORT_ERROR here) and
@@ -466,6 +494,68 @@ def test_repair_only_sends_the_model_the_chosen_diagnosis_failure_text(tmp_path:
     _system, prompt = fake_model.calls[0]
     assert "PydanticImportError" in prompt
     assert "ValidationError" not in prompt
+
+
+def test_repair_falls_through_to_the_next_priority_diagnosis_when_the_top_one_has_no_target(
+    tmp_path: Path,
+) -> None:
+    # docs/decisions.md D50: found live on a real corpus repo — an import_error whose
+    # ONLY first-party traceback frame is a test file itself (extract_target_file
+    # correctly refuses to point at it, per I1) must not make repair() give up entirely
+    # when a lower-priority diagnosis (validation_behaviour) points at a real, fixable
+    # source file.
+    source_root, overlay_root = _setup_source(tmp_path, content="x = 1\n")
+    import_traceback_test_file_only = (
+        "tests/test_control.py:25: in <module>\n"
+        "    class Dummy(config: pydantic.BaseSettings=None):\n"
+        "E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved"
+    )
+    validation_traceback = (
+        "app/models.py:1: in <module>\n"
+        "    Other()\n"
+        "E   pydantic_core._pydantic_core.ValidationError: 1 validation error for Other"
+    )
+    run = TestRun(
+        outcomes=(
+            TestOutcome(
+                "t.py::test_import", "failed", 0.1, "boom", import_traceback_test_file_only, None
+            ),
+            TestOutcome("t.py::test_validation", "failed", 0.1, "boom", validation_traceback, None),
+        ),
+        collection_errors=(),
+        exit_code=1,
+        duration_s=0.1,
+        truncated=False,
+    )
+    sandbox = FakeSandbox(responses=[run, _passed_run()])
+    fake_model = FakeModelClient(
+        responses=[
+            ModelResponse(
+                text="File: app/models.py\n```python\nx = 2\n```\n",
+                usd_cost=0.01,
+                tokens_in=10,
+                tokens_out=10,
+            )
+        ]
+    )
+    graph = build_migration_graph(
+        sandbox=sandbox,
+        image=_image(),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        policy=SandboxPolicy(),
+        model_client=fake_model,
+    )
+    state = AgentState(repo=_repo(), work_list=[[_unit()]])
+
+    result = graph.invoke(state)
+
+    # fell through past the target-less import_error diagnosis and repaired using the
+    # validation_behaviour one instead of giving up with repair_no_target
+    assert len(fake_model.calls) == 1
+    _system, prompt = fake_model.calls[0]
+    assert "ValidationError" in prompt
+    assert result["status"] == "done"
 
 
 def test_use_triage_false_still_attempts_repair_on_an_all_preexisting_failure(

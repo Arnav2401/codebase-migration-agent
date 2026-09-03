@@ -2062,6 +2062,53 @@ behavior each provider needed."
 
 ---
 
+## D50 — `repair()` falls through past a target-less top-priority diagnosis
+
+**Alternatives:** treat this as a bug in `extract_target_file` and make it fall back to
+pointing at a test file when nothing else is available; leave it as-is and count it as an
+inherent limitation of per-diagnosis routing.
+
+**Why:** the first live triage-on-vs-off corpus comparison (docs/results/triage.md) showed
+`madkote__fastapi-plugins` scoring WORSE with triage on (0.37) than off (0.52) — the one
+case where triage looked like a regression rather than a win. Root cause, confirmed by
+reading the actual traceback text: the top-priority diagnosis that iteration was
+`IMPORT_ERROR`, and its ONLY first-party frame was `tests/test_control.py` itself — the
+test file directly annotates a field as `pydantic.BaseSettings`, so pytest fails just
+importing it, and there is no non-test frame anywhere in that traceback.
+`extract_target_file` correctly returned `None` (invariant I1: the agent must never edit
+a test file, so pointing at one as a "target" would be worse than finding nothing) — but
+`repair()` then gave up for the WHOLE iteration instead of trying the next-priority
+diagnosis (`VALIDATION_BEHAVIOUR`, pointing at a real, fixable source file). The
+`use_triage=False` arm only "won" because it doesn't do per-diagnosis routing at all — it
+extracts a target from every failure's combined text, which happened to include a
+frame `extract_target_file` COULD use.
+
+Rejected making `extract_target_file` point at a test file as a fallback: that would
+require calling code to specially avoid ever actually editing what it returns, which is
+exactly the kind of "trust the caller to remember the invariant" gap I1's own
+`apply_patch` chokepoint exists to eliminate — better to keep "never returns a test path"
+as an unconditional property of that function. Rejected accepting it as inherent: the real
+gap was one level up, in `repair()` only ever trying ONE candidate.
+
+Fixed by extracting `_select_repair_target`'s dict-building logic into
+`_repair_candidates_in_priority_order`, returning the FULL ordered list rather than just
+the winner, and having `repair()` walk it — calling `extract_target_file` on each
+candidate's own failure texts in priority order until one succeeds, only giving up
+(`repair_no_target`) once every candidate has been tried. `_select_repair_target` itself
+is kept, now a one-line wrapper (`ordered[0] if ordered else None`), so its existing
+tests and any other caller that only cares about priority ordering are unaffected.
+
+**Interview:** "The corpus comparison told me something interesting had happened — triage
+losing to the naive approach on one repo — and I didn't want to just note that as a
+limitation and move on, because the direction was backwards from what the whole design
+argues for. Reading the actual traceback text showed the real story: `extract_target_file`
+was doing exactly the right thing (refusing to point at a test file), and the bug was that
+`repair()` never asked it about a second candidate. The fix is small precisely because the
+underlying pieces — priority ordering, target extraction, the invariant boundary — were
+already correct; it's the walk between them that was missing."
+
+---
+
 ## Template
 
 ```

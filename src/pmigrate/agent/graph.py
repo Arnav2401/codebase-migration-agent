@@ -66,19 +66,32 @@ _REPAIR_PRIORITY: tuple[FailureClass, ...] = (
 )
 
 
-def _select_repair_target(candidates: list[GroupedDiagnosis]) -> GroupedDiagnosis | None:
-    # first-occurrence-wins on a class collision (two groups of the same FailureClass,
-    # split apart because they have different root frames) — deterministic given
-    # `group_raw_failures`'s dict-iteration-order output, and a real tie-break policy
-    # isn't worth building until evidence shows one repair attempt over the other
-    # actually matters for fix rate.
+def _repair_candidates_in_priority_order(
+    candidates: list[GroupedDiagnosis],
+) -> list[GroupedDiagnosis]:
+    """Every repairable candidate, ordered by `_REPAIR_PRIORITY` — first-occurrence-wins
+    on a class collision (two groups of the same `FailureClass`, split apart because they
+    have different root frames), deterministic given `group_raw_failures`'s dict-iteration
+    order. `repair()` walks this list rather than acting on just the first entry
+    (docs/decisions.md D50): a diagnosis can be the right PRIORITY to fix and still have no
+    findable target (`extract_target_file` correctly refuses to point at a test file per
+    I1, and sometimes a test file's own traceback frame is the only first-party one there
+    is) — found live on a real corpus repo where the top-priority diagnosis's only
+    first-party frame was the test file itself, and `repair()` gave up entirely instead of
+    trying the next, genuinely fixable diagnosis."""
     by_class: dict[FailureClass, GroupedDiagnosis] = {}
     for g in candidates:
         by_class.setdefault(g.diagnosis.cls, g)
-    for cls in _REPAIR_PRIORITY:
-        if cls in by_class:
-            return by_class[cls]
-    return None
+    return [by_class[cls] for cls in _REPAIR_PRIORITY if cls in by_class]
+
+
+def _select_repair_target(candidates: list[GroupedDiagnosis]) -> GroupedDiagnosis | None:
+    """The single highest-priority candidate, ignoring whether it actually has a
+    findable target — kept for callers (and existing tests) that only care about
+    priority ordering itself. `repair()` uses `_repair_candidates_in_priority_order`
+    directly so it can fall through past a target-less top candidate instead."""
+    ordered = _repair_candidates_in_priority_order(candidates)
+    return ordered[0] if ordered else None
 
 
 def _failing_node_ids(outcomes: tuple[TestOutcome, ...]) -> list[str]:
@@ -222,8 +235,10 @@ def build_migration_graph(
         "group failures naively and hand the model the trimmed log" approach
         docs/phase-3-loop.md originally described — `route()` already guarantees at
         least one non-PREEXISTING diagnosis exists by the time this node runs, so this
-        picks ONE concrete failure class to fix per attempt (`_select_repair_target`)
-        instead of dumping every failure text into one prompt regardless of cause.
+        picks ONE concrete failure class to fix per attempt — trying every repairable
+        candidate in priority order (`_repair_candidates_in_priority_order`, D50) until
+        one has a findable target — instead of dumping every failure text into one
+        prompt regardless of cause.
 
         Re-derives `state.diagnoses` down to `GroupedDiagnosis` (full `RawFailure` text,
         not just `Diagnosis.evidence`'s ~200-char snippet) via `group_raw_failures`
@@ -246,6 +261,7 @@ def build_migration_graph(
             return {}
 
         chosen: GroupedDiagnosis | None = None
+        target_path: str | None = None
         if use_triage:
             grouped = group_raw_failures(raw_failures, state.repo.baseline)
             repairable = [
@@ -254,19 +270,33 @@ def build_migration_graph(
                 if g.diagnosis.cls
                 not in (FailureClass.PREEXISTING, FailureClass.THIRD_PARTY_PIN, FailureClass.FLAKY)
             ]
-            chosen = _select_repair_target(repairable)
+            # docs/decisions.md D50: try EVERY repairable candidate in priority order,
+            # not just the top one — a diagnosis can be the right priority to fix and
+            # still have no findable target (extract_target_file correctly refuses to
+            # point at a test file per I1), and the next-priority diagnosis is often
+            # genuinely fixable when that happens.
+            failure_texts: tuple[str, ...] = ()
+            for candidate in _repair_candidates_in_priority_order(repairable):
+                candidate_texts = tuple(f.text for f in candidate.raw_failures)
+                candidate_target = extract_target_file(candidate_texts, overlay_root)
+                if candidate_target is not None:
+                    chosen, target_path, failure_texts = (
+                        candidate,
+                        candidate_target,
+                        candidate_texts,
+                    )
+                    break
             if chosen is None:
                 log.warning(
                     "agent.repair_no_target", trace_id=state.trace_id, repo_id=state.repo.repo_id
                 )
                 return {}  # no state change; no_progress eventually catches a real stall
-            failure_texts = tuple(f.text for f in chosen.raw_failures)
         else:
             # docs/decisions.md D40: the pre-D38 "Phase 3" shape — every raw failure
             # dumped into one prompt, no per-class targeting at all.
             failure_texts = tuple(f.text for f in raw_failures)
+            target_path = extract_target_file(failure_texts, overlay_root)
 
-        target_path = extract_target_file(failure_texts, overlay_root)
         if target_path is None:
             log.warning(
                 "agent.repair_no_target",
