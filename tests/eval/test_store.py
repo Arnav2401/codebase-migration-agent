@@ -1,4 +1,6 @@
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -170,3 +172,42 @@ def test_load_all_filters_by_corpus_sha_when_given(tmp_path: Path) -> None:
     loaded = store.load_all(corpus_sha="sha-one")
 
     assert [r.repo_id for r in loaded] == ["acme__a"]
+
+
+def test_save_result_is_safe_under_real_concurrent_writes(tmp_path: Path) -> None:
+    # docs/decisions.md D66: run_corpus's parallel mode hands ONE ResultStore instance to
+    # every worker thread. Without check_same_thread=False + the instance lock, this
+    # either raises sqlite3.ProgrammingError outright or silently corrupts state under
+    # real thread contention -- a single-threaded test can't tell the difference between
+    # "the lock works" and "the lock doesn't exist," so this uses a real ThreadPoolExecutor,
+    # not a sequential loop.
+    store = ResultStore(tmp_path / "results.db")
+    n_threads = 16
+
+    def _save(i: int) -> None:
+        store.save_result(_result(f"acme__{i}"), "deadbeef", written_at=float(i))
+
+    with ThreadPoolExecutor(max_workers=n_threads) as executor:
+        list(executor.map(_save, range(n_threads)))
+
+    loaded = store.load_all()
+    assert {r.repo_id for r in loaded} == {f"acme__{i}" for i in range(n_threads)}
+
+
+def test_has_result_and_save_result_interleave_safely_across_threads(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path / "results.db")
+    c_hash = config_hash(_config())
+    barrier = threading.Barrier(8)
+
+    def _round_trip(i: int) -> bool:
+        barrier.wait()  # maximize actual concurrent overlap, not just "started nearby"
+        repo_id = f"acme__{i}"
+        before = store.has_result(repo_id, c_hash, "deadbeef")
+        store.save_result(_result(repo_id), "deadbeef", written_at=float(i))
+        after = store.has_result(repo_id, c_hash, "deadbeef")
+        return (not before) and after
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = list(executor.map(_round_trip, range(8)))
+
+    assert all(outcomes)

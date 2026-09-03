@@ -84,6 +84,26 @@ def test_main_rejects_an_invalid_split(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_main_rejects_a_sub_one_max_workers(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            "graph",
+            "--max-workers",
+            "0",
+            "--configs-dir",
+            str(configs_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+
+
 def test_main_exits_with_code_1_when_docker_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

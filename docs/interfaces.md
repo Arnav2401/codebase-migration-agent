@@ -456,15 +456,23 @@ round-trips through `EvalConfig.to_dict`/`from_dict` directly, no new dependency
 dispatches a real `ModelClient` via an explicit whitelist keyed by `config.model`
 (`GeminiModelClient`/`GroqModelClient` — the only two real clients this project has),
 wires up a real `DockerSandbox`, writes the run manifest before/after via
-`eval/manifest.py`, and writes `docs/results/<config>.md` via `eval/report.py`. D65 (this
-step) closed the cross-arm gap: `eval/stats.py`'s `bootstrap_mean_ci` (percentile
-bootstrap, seeded independent of `EvalConfig.seed` — I6 applies to the statistics too, not
-just the agent run), `ResultStore.load_all` (the method D63 deliberately deferred), and
-`eval/report.py`'s new `write_main_report` combine every arm's stored results into one
-headline table (mean pass_rate and full_green fraction, each with a 95% CI) plus a
-per-repo appendix — `eval/report_cli.py`'s `pmigrate eval report` is the CLI wiring,
-scoped to the current corpus manifest's content hash. Verified live end-to-end at every
-step (D64's/D65's own decision entries have the numbers, including a real resumed second
-`eval run` invocation and a real, appropriately wide CI at N=7). Still missing from the
-full sketch: parallelism over Docker, and the `model_*` arm's Claude/GPT/local-Llama
-clients (`model_groq` is the one real second-provider config today).
+`eval/manifest.py`, and writes `docs/results/<config>.md` via `eval/report.py`. D65 closed
+the cross-arm gap: `eval/stats.py`'s `bootstrap_mean_ci` (percentile bootstrap, seeded
+independent of `EvalConfig.seed` — I6 applies to the statistics too, not just the agent
+run), `ResultStore.load_all` (the method D63 deliberately deferred), and `eval/report.py`'s
+`write_main_report` combine every arm's stored results into one headline table (mean
+pass_rate and full_green fraction, each with a 95% CI) plus a per-repo appendix —
+`eval/report_cli.py`'s `pmigrate eval report` is the CLI wiring, scoped to the current
+corpus manifest's content hash. D66 (this step) closed the parallelism gap:
+`run_corpus` gained `max_workers`/`total_usd_cap` — `max_workers=1` (default) keeps the
+exact prior sequential control flow, `max_workers>1` dispatches repos via a
+`ThreadPoolExecutor`, and `total_usd_cap` stops STARTING new repos (not killing in-flight
+ones) once the running total meets it. Fixed two real thread-safety bugs surfaced by
+parallelism actually reaching code that had never run on more than one thread before:
+`ResultStore`'s shared `sqlite3` connection (now `check_same_thread=False` plus an
+instance lock) and `_dump_residual_failures`'s shared append-mode file (now a module-level
+lock). Verified live end-to-end at every step (D64's/D65's/D66's own decision entries have
+the numbers, including a real 4-way-parallel `eval run` against the actual corpus with
+zero result corruption). Still missing from the full sketch: the `model_*` arm's
+Claude/GPT/local-Llama clients (`model_groq` is the one real second-provider config
+today).

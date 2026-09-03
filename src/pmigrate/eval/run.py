@@ -13,6 +13,10 @@ this project has exactly two verified real clients; guessing at a naming convent
 providers that don't exist here yet would be speculative, not implemented. Extending the
 `model_*` ablation arm to a third provider is exactly "add one more entry here."
 
+`--max-workers`/`--total-usd-cap` (docs/decisions.md D66) pass straight through to
+`run_corpus`'s own params of the same name — see that function's docstring for what each
+actually does (and doesn't: `total_usd_cap` stops STARTING new repos, not in-flight ones).
+
 Not unit-tested against real Docker/network (matches `eval/harness.py`'s own
 `checkout_pre_sha`/`run_corpus` carve-out) — `main`'s own orchestration is exercised by a
 live `make eval` run, not pytest. `_build_model_client` and the JSON config loading ARE
@@ -86,9 +90,13 @@ def main(
     work_root: Path = Path("eval_work"),
     results_db: Path = Path("eval_results.db"),
     out_dir: Path = Path("docs/results"),
+    max_workers: int = 1,
+    total_usd_cap: float | None = None,
 ) -> None:
     if split not in ("dev", "test"):
         raise typer.BadParameter(f"split must be 'dev' or 'test', got {split!r}")
+    if max_workers < 1:
+        raise typer.BadParameter(f"max_workers must be >= 1, got {max_workers}")
 
     config_path = configs_dir / f"{config}.json"
     if not config_path.exists():
@@ -132,6 +140,8 @@ def main(
             config=eval_config,
             split=split,  # type: ignore[arg-type]
             resume=ResumeContext(store=store, corpus_sha=c_sha),
+            max_workers=max_workers,
+            total_usd_cap=total_usd_cap,
         )
     finally:
         store.close()

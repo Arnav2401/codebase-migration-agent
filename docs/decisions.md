@@ -2851,6 +2851,73 @@ from 340 repos are very different claims wearing the same notation."
 
 ---
 
+## D66 — Parallel `run_corpus`: threads, a checked-not-enforced global cap, two real bugs
+
+**Alternatives:** multiprocessing — rejected; the work per repo (git clone, Docker
+build/run, LLM HTTP calls) is I/O-bound, waiting on subprocesses and sockets that already
+release the GIL, so threads get real concurrency without multiprocessing's IPC/pickling
+overhead, and without needing `ResultStore`/`ModelClient` to survive being sent across a
+process boundary at all. An async rewrite (`asyncio` + `httpx`/`aiodocker`) — rejected as
+disproportionate: it would mean rewriting `checkout_pre_sha`'s subprocess calls,
+`DockerSandbox`'s Docker CLI invocations, and every `ModelClient`'s `requests` calls to be
+async, just to get concurrency threads already provide for this exact I/O-bound shape.
+Killing an in-flight repo's Docker container the instant the global cost cap is hit —
+considered and rejected: reclaiming a live container cleanly (process group teardown,
+partial trace/edit state, an honest partial `RepoResult` for the repo that got cut off
+mid-run) is a materially bigger feature than "a global cap," and phase-5-eval.md's own
+line ("Cost cap enforced globally, not just per repo") doesn't ask for mid-run
+cancellation specifically — it asks for the total to be tracked and acted on, which
+checking before each new repo starts already does honestly.
+
+**Why:** `run_corpus` was sequential — one repo's checkout/build/run/score fully finished
+before the next one's `checkout_pre_sha` call even started. Parallelizing it needed one
+new capability (a concurrency cap) plus, once repos could genuinely run at the same time,
+fixing two things that were never actually thread-safe because nothing before this change
+ever called them from more than one thread: `ResultStore`'s single `sqlite3` connection
+(sqlite3 raises trying to use a connection across threads without
+`check_same_thread=False`, and even with it, concurrent statements on ONE connection
+without an external lock can interleave badly at the C level) and
+`_dump_residual_failures`'s shared append-mode `failures_out` file (two repos' `f.write()`
+calls interleaving mid-line would silently corrupt a JSONL line, not raise anything).
+Neither bug was reachable before this step — `run_corpus` had exactly one caller path
+(sequential) since it was written.
+
+**Fixed by** `eval/harness.py`'s `_run_one_repo` (the old per-repo loop body, factored out
+unchanged so `max_workers=1` — the default — is byte-for-byte the same control flow and
+log ordering as before this commit; every existing test needed zero changes), dispatched
+either from a plain loop or a `ThreadPoolExecutor(max_workers=...)`. `_GlobalBudgetTracker`
+is a lock-protected running total, checked via `.exhausted()` before `_run_one_repo` does
+any real work and updated via `.add()` after a repo finishes — a repo already in flight
+when the cap trips keeps running (see this decision's own "Alternatives" for why).
+`ResultStore` gained `check_same_thread=False` plus an instance `threading.Lock` around
+every method touching `self._conn`. `_dump_residual_failures` gained a module-level lock
+around its file write. `eval/run.py` exposes both as `--max-workers`/`--total-usd-cap`,
+passed straight through to `run_corpus`.
+
+**Verified live, not just by pytest:** a real `make eval CONFIG=graph` run with
+`--max-workers 4` against the actual corpus (real Docker builds, real Gemini calls, same
+known 429 quota wall as every prior live run this phase) completed with all 7 repos
+scored and `eval_results.db` containing exactly 7 distinct rows afterward — no duplicate
+or missing repo_ids, no sqlite3 thread errors, confirming the store's thread-safety fix
+holds under genuine concurrent Docker/network load, not only under pytest's
+`ThreadPoolExecutor`-based unit tests (`test_save_result_is_safe_under_real_concurrent_writes`,
+which uses a real thread pool specifically because a sequential test can't distinguish
+"the lock works" from "the lock doesn't exist"). A `FakeSandbox`-based timing test
+(`test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially`, 4 repos each
+sleeping 0.3s in `run_tests`) proves the concurrency is real, not just accepted and
+silently ignored: total elapsed time stays under 2× one delay instead of the ≥4× a
+sequential run would need.
+
+**Interview:** "The riskiest part of this change wasn't the concurrency logic itself — it
+was that `run_corpus` had NEVER been called from more than one thread before, so two
+latent thread-safety bugs in code that already existed (the SQLite store, the shared
+failures file) had simply never had a chance to matter. Parallelizing the orchestration
+loop is what turned 'this code happens to only ever run on one thread' into a real
+requirement. Finding and fixing both before shipping concurrency, rather than after a
+corrupted results file showed up during a real multi-hour run, was the actual work here."
+
+---
+
 ## Template
 
 ```

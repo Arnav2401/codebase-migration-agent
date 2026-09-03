@@ -10,10 +10,9 @@ anything, since the caller already passes a live `model_client` object directly.
 
 `run_corpus`'s `resume: ResumeContext | None` (docs/decisions.md D63) makes it resumable —
 a `(repo_id, config_hash(config), resume.corpus_sha)` cell already in `resume.store` is
-loaded instead of re-run. Still NOT the full parallel-over-Docker harness
-interfaces.md §8/phase-5-eval.md describe, and there's still no `make eval` CLI entrypoint
-(`configs/*.yaml` loading, the run-manifest write via `eval/manifest.py` around the call) —
-both later Phase 5 steps, separable from resumability itself.
+loaded instead of re-run. `max_workers`/`total_usd_cap` (docs/decisions.md D66) make it
+parallel over Docker via a `ThreadPoolExecutor` — `max_workers=1` (the default) keeps the
+exact prior sequential control flow, so every existing caller is unaffected.
 
 Split for testability (CLAUDE.md: no network in unit tests): `run_repo` takes an
 ALREADY-checked-out `source_root` and a pre-built `image`, so it can be exercised with
@@ -28,7 +27,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
@@ -62,6 +63,12 @@ log = structlog.get_logger()
 
 CLONE_TIMEOUT_S = 300
 CHECKOUT_TIMEOUT_S = 60
+
+# guards _dump_residual_failures's shared append-mode file (docs/decisions.md D66) --
+# run_corpus's parallel mode can have multiple repos' _run_one_repo calls writing to the
+# SAME failures_out path concurrently; without this, two repos' JSONL lines could
+# interleave mid-line, since a Python-level `f.write()` per line isn't one atomic OS write.
+_failures_out_lock = threading.Lock()
 
 
 def checkout_pre_sha(repo: RepoSpec, dest: Path) -> None:
@@ -99,7 +106,7 @@ def _dump_residual_failures(repo: RepoSpec, final_state: Any, out_path: Path) ->
     if last_run is None:
         return
     grouped = group_raw_failures(collect_raw_failures(last_run), repo.baseline)
-    with out_path.open("a") as f:
+    with _failures_out_lock, out_path.open("a") as f:
         for g in grouped:
             for raw in g.raw_failures:
                 f.write(
@@ -271,6 +278,121 @@ def run_repo(
     return result
 
 
+class _GlobalBudgetTracker:
+    """Thread-safe running total for `run_corpus`'s optional `total_usd_cap`
+    (docs/decisions.md D66) — checked before STARTING a new repo, not enforced by killing
+    an in-flight one. A repo already running when the cap is hit finishes normally rather
+    than being cut off mid-Docker-run: cancelling a live container cleanly (killing the
+    process group, reclaiming partial trace/edit state) is a materially bigger feature
+    than "parallelism with a cost cap" calls for, so the possible overshoot — up to
+    `max_workers` repos' worth of already-in-flight spending — is a named limitation, not
+    something silently approximated by a check that looks precise but isn't."""
+
+    def __init__(self, cap: float) -> None:
+        self._cap = cap
+        self._spent = 0.0
+        self._lock = threading.Lock()
+
+    def exhausted(self) -> bool:
+        with self._lock:
+            return self._spent >= self._cap
+
+    def add(self, usd: float) -> None:
+        with self._lock:
+            self._spent += usd
+
+
+def _run_one_repo(
+    repo: RepoSpec,
+    *,
+    work_root: Path,
+    sandbox: Sandbox,
+    model_client: ModelClient | None,
+    config: EvalConfig,
+    split: Literal["dev", "test"] | None,
+    policy: SandboxPolicy | None,
+    budget: BudgetState | None,
+    failures_out: Path | None,
+    resume: ResumeContext | None,
+    budget_tracker: _GlobalBudgetTracker | None,
+) -> RepoResult | None:
+    """One repo's worth of `run_corpus`'s loop body — factored out so both the sequential
+    path (`max_workers=1`, identical control flow to before docs/decisions.md D66) and the
+    `ThreadPoolExecutor` path call the exact same logic. Returns `None` for every "skip
+    this repo" case (no baseline, wrong split, global budget exhausted, or a real failure)
+    so both callers share one "only keep non-None results" rule."""
+    if repo.baseline is None:
+        log.info("harness.skip_no_baseline", repo_id=repo.repo_id)
+        return None
+    if split is not None and repo.split != split:
+        return None
+
+    if resume is not None:
+        c_hash = config_hash(config)
+        if resume.store.has_result(repo.repo_id, c_hash, resume.corpus_sha):
+            existing = resume.store.load_result(repo.repo_id, c_hash, resume.corpus_sha)
+            if existing is not None:
+                log.info("harness.skip_already_scored", repo_id=repo.repo_id)
+                return existing
+
+    if budget_tracker is not None and budget_tracker.exhausted():
+        log.info("harness.skip_global_budget_exhausted", repo_id=repo.repo_id)
+        return None
+
+    repo_root = work_root / repo.repo_id
+    source_root = repo_root / "source"
+    overlay_root = repo_root / "overlay"
+    # fresh every run (docs/decisions.md D45): edit_t1 only writes a file into
+    # overlay_root if it doesn't already exist there, so a stale overlay left over
+    # from an earlier run at this same work_root would already contain the PREVIOUS
+    # run's T1/T2 edits already applied — apply_rules would then see before==after
+    # (nothing left to change) and silently report edits_applied=0, understating what
+    # T1 actually does on a genuinely fresh checkout. Found live: a re-run against the
+    # same work_root reused a prior run's already-migrated overlay content.
+    if overlay_root.exists():
+        shutil.rmtree(overlay_root)
+    overlay_root.mkdir(parents=True)
+
+    try:
+        checkout_pre_sha(repo, source_root)
+        image = sandbox.build(repo, "v2")
+        # a fresh started_at per repo — reusing one BudgetState instance across every
+        # repo in the loop would make wallclock_cap_s count from the FIRST repo's
+        # start, not each repo's own, and falsely trip on a later repo in a long run.
+        repo_budget = replace(budget, started_at=time.time()) if budget else None
+        result = run_repo(
+            repo,
+            image=image,
+            source_root=source_root,
+            overlay_root=overlay_root,
+            sandbox=sandbox,
+            model_client=model_client,
+            config=config,
+            policy=policy,
+            budget=repo_budget,
+            failures_out=failures_out,
+        )
+    except Exception as e:
+        log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
+        return None
+
+    if resume is not None:
+        resume.store.save_result(result, resume.corpus_sha, written_at=time.time())
+    if budget_tracker is not None:
+        budget_tracker.add(result.usd_spent)
+
+    log.info(
+        "harness.repo_scored",
+        repo_id=repo.repo_id,
+        config=config.name,
+        triage=config.triage,
+        pass_rate=result.pass_rate,
+        full_green=result.full_green,
+        usd_spent=result.usd_spent,
+    )
+    return result
+
+
 def run_corpus(
     specs: list[RepoSpec],
     *,
@@ -283,6 +405,8 @@ def run_corpus(
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
     resume: ResumeContext | None = None,
+    max_workers: int = 1,
+    total_usd_cap: float | None = None,
 ) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
@@ -291,74 +415,63 @@ def run_corpus(
     `resume` (docs/decisions.md D63): when set, a `(repo_id, config_hash, corpus_sha)`
     cell already in `resume.store` is loaded and returned WITHOUT re-checkout/build/run —
     the whole point of resumability is skipping that expensive work, not just skipping
-    the scoring at the end. `config_hash` is computed once per repo (not hoisted above the
-    loop) since it's a cheap pure function of `config`, which doesn't change mid-call."""
-    results = []
-    for repo in specs:
-        if repo.baseline is None:
-            log.info("harness.skip_no_baseline", repo_id=repo.repo_id)
-            continue
-        if split is not None and repo.split != split:
-            continue
+    the scoring at the end.
 
-        if resume is not None:
-            c_hash = config_hash(config)
-            if resume.store.has_result(repo.repo_id, c_hash, resume.corpus_sha):
-                existing = resume.store.load_result(repo.repo_id, c_hash, resume.corpus_sha)
-                if existing is not None:
-                    log.info("harness.skip_already_scored", repo_id=repo.repo_id)
-                    results.append(existing)
-                    continue
+    `max_workers`/`total_usd_cap` (docs/decisions.md D66): `max_workers=1` (the default)
+    runs the exact sequential control flow this function always has — same log ordering,
+    same "one repo builds while another's Docker call is still running" NEVER happening —
+    so every existing caller/test is unaffected. `max_workers>1` runs repos concurrently
+    via a `ThreadPoolExecutor` (I/O-bound work: git clone, Docker, LLM HTTP calls all
+    release the GIL while waiting), matching phase-5-eval.md's "parallel over Docker with
+    a concurrency cap that matches your machine." `total_usd_cap`, if given, stops
+    STARTING new repos once the running total already spent meets or exceeds it — see
+    `_GlobalBudgetTracker`'s own docstring for why an in-flight repo isn't cut off."""
+    if max_workers < 1:
+        raise ValueError(f"max_workers must be >= 1, got {max_workers}")
 
-        repo_root = work_root / repo.repo_id
-        source_root = repo_root / "source"
-        overlay_root = repo_root / "overlay"
-        # fresh every run (docs/decisions.md D45): edit_t1 only writes a file into
-        # overlay_root if it doesn't already exist there, so a stale overlay left over
-        # from an earlier run at this same work_root would already contain the PREVIOUS
-        # run's T1/T2 edits already applied — apply_rules would then see before==after
-        # (nothing left to change) and silently report edits_applied=0, understating what
-        # T1 actually does on a genuinely fresh checkout. Found live: a re-run against the
-        # same work_root reused a prior run's already-migrated overlay content.
-        if overlay_root.exists():
-            shutil.rmtree(overlay_root)
-        overlay_root.mkdir(parents=True)
+    budget_tracker = _GlobalBudgetTracker(total_usd_cap) if total_usd_cap is not None else None
 
-        try:
-            checkout_pre_sha(repo, source_root)
-            image = sandbox.build(repo, "v2")
-            # a fresh started_at per repo — reusing one BudgetState instance across every
-            # repo in the loop would make wallclock_cap_s count from the FIRST repo's
-            # start, not each repo's own, and falsely trip on a later repo in a long run.
-            repo_budget = replace(budget, started_at=time.time()) if budget else None
-            result = run_repo(
+    if max_workers == 1:
+        results = []
+        for repo in specs:
+            result = _run_one_repo(
                 repo,
-                image=image,
-                source_root=source_root,
-                overlay_root=overlay_root,
+                work_root=work_root,
                 sandbox=sandbox,
                 model_client=model_client,
                 config=config,
+                split=split,
                 policy=policy,
-                budget=repo_budget,
+                budget=budget,
                 failures_out=failures_out,
+                resume=resume,
+                budget_tracker=budget_tracker,
             )
-        except Exception as e:
-            log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
-            continue
+            if result is not None:
+                results.append(result)
+        return results
 
-        if resume is not None:
-            resume.store.save_result(result, resume.corpus_sha, written_at=time.time())
-
-        results.append(result)
-        log.info(
-            "harness.repo_scored",
-            repo_id=repo.repo_id,
-            config=config.name,
-            triage=config.triage,
-            pass_rate=result.pass_rate,
-            full_green=result.full_green,
-            usd_spent=result.usd_spent,
-        )
-
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _run_one_repo,
+                repo,
+                work_root=work_root,
+                sandbox=sandbox,
+                model_client=model_client,
+                config=config,
+                split=split,
+                policy=policy,
+                budget=budget,
+                failures_out=failures_out,
+                resume=resume,
+                budget_tracker=budget_tracker,
+            )
+            for repo in specs
+        ]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
     return results

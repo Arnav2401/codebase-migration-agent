@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,44 +129,55 @@ class ResultStore:
     are denormalized into their own columns alongside the full `result_json` blob so the
     DB is queryable (`sqlite3 results.db "select repo_id, pass_rate from results ..."`)
     without deserializing JSON -- interfaces.md §7's own "SQLite index for the dashboard"
-    precedent, applied here to Phase 5's result store instead of Phase 6's trace store."""
+    precedent, applied here to Phase 5's result store instead of Phase 6's trace store.
+
+    Safe to share across threads (docs/decisions.md D66): `run_corpus`'s parallel mode
+    hands the SAME `ResultStore` instance to every worker thread. `check_same_thread=False`
+    alone isn't enough -- sqlite3's C-level GIL release during I/O can interleave two
+    threads' statements on ONE connection without an explicit lock, so every method here
+    holds `self._lock` around its `self._conn` calls."""
 
     def __init__(self, db_path: Path) -> None:
-        self._conn = sqlite3.connect(db_path)
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS results (
-                repo_id TEXT NOT NULL,
-                config_hash TEXT NOT NULL,
-                corpus_sha TEXT NOT NULL,
-                config_name TEXT NOT NULL,
-                pass_rate REAL NOT NULL,
-                full_green INTEGER NOT NULL,
-                usd_spent REAL NOT NULL,
-                result_json TEXT NOT NULL,
-                written_at REAL NOT NULL,
-                PRIMARY KEY (repo_id, config_hash, corpus_sha)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS results (
+                    repo_id TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    corpus_sha TEXT NOT NULL,
+                    config_name TEXT NOT NULL,
+                    pass_rate REAL NOT NULL,
+                    full_green INTEGER NOT NULL,
+                    usd_spent REAL NOT NULL,
+                    result_json TEXT NOT NULL,
+                    written_at REAL NOT NULL,
+                    PRIMARY KEY (repo_id, config_hash, corpus_sha)
+                )
+                """
             )
-            """
-        )
-        self._conn.commit()
+            self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def has_result(self, repo_id: str, config_hash: str, corpus_sha: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM results WHERE repo_id = ? AND config_hash = ? AND corpus_sha = ?",
-            (repo_id, config_hash, corpus_sha),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM results WHERE repo_id = ? AND config_hash = ? AND corpus_sha = ?",
+                (repo_id, config_hash, corpus_sha),
+            ).fetchone()
         return row is not None
 
     def load_result(self, repo_id: str, config_hash: str, corpus_sha: str) -> RepoResult | None:
-        row = self._conn.execute(
-            "SELECT result_json FROM results "
-            "WHERE repo_id = ? AND config_hash = ? AND corpus_sha = ?",
-            (repo_id, config_hash, corpus_sha),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT result_json FROM results "
+                "WHERE repo_id = ? AND config_hash = ? AND corpus_sha = ?",
+                (repo_id, config_hash, corpus_sha),
+            ).fetchone()
         if row is None:
             return None
         return _result_from_dict(json.loads(row[0]))
@@ -176,35 +188,37 @@ class ResultStore:
         deferred building ("a natural next step for the report generator"). Optionally
         scoped to one `corpus_sha` -- combining results scored against different corpus
         content into one report would silently mix runs that aren't comparable."""
-        if corpus_sha is not None:
-            rows = self._conn.execute(
-                "SELECT result_json FROM results WHERE corpus_sha = ?", (corpus_sha,)
-            ).fetchall()
-        else:
-            rows = self._conn.execute("SELECT result_json FROM results").fetchall()
+        with self._lock:
+            if corpus_sha is not None:
+                rows = self._conn.execute(
+                    "SELECT result_json FROM results WHERE corpus_sha = ?", (corpus_sha,)
+                ).fetchall()
+            else:
+                rows = self._conn.execute("SELECT result_json FROM results").fetchall()
         return [_result_from_dict(json.loads(row[0])) for row in rows]
 
     def save_result(self, result: RepoResult, corpus_sha: str, *, written_at: float) -> None:
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO results
-                (repo_id, config_hash, corpus_sha, config_name, pass_rate, full_green,
-                 usd_spent, result_json, written_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                result.repo_id,
-                config_hash(result.config),
-                corpus_sha,
-                result.config.name,
-                result.pass_rate,
-                int(result.full_green),
-                result.usd_spent,
-                json.dumps(_result_to_dict(result)),
-                written_at,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO results
+                    (repo_id, config_hash, corpus_sha, config_name, pass_rate, full_green,
+                     usd_spent, result_json, written_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.repo_id,
+                    config_hash(result.config),
+                    corpus_sha,
+                    result.config.name,
+                    result.pass_rate,
+                    int(result.full_green),
+                    result.usd_spent,
+                    json.dumps(_result_to_dict(result)),
+                    written_at,
+                ),
+            )
+            self._conn.commit()
 
 
 @dataclass(frozen=True)
