@@ -2225,6 +2225,43 @@ than it was."
 
 ---
 
+## D54 — Add capped retry-on-5xx to `GeminiModelClient`, deliberately not on 429
+
+**Alternatives:** give Gemini the exact same `Retry-After`-driven retry shape as
+`GroqModelClient`; add no retry at all and just accept that a transient server error
+fails the whole repo.
+
+**Why:** switched to Gemini as a stopgap while Groq's `openai/gpt-oss-120b` daily token
+quota (200K TPD, confirmed via `console.groq.com/settings/limits`) was exhausted from a
+day of heavy corpus runs. A quota probe against `GeminiModelClient` hit a bare
+`503 Service Unavailable` on its first call — genuinely transient, no quota signal at all
+— and failed the entire repo outright, because `complete()` had zero retry logic; a
+second, identical attempt succeeded cleanly moments later. Mirroring Groq's
+`Retry-After`-driven retry shape verbatim was rejected: Gemini's 5xx responses carry no
+equivalent header to key off, and more importantly D48 already established that Gemini's
+429 specifically is a persistent daily-quota wall, not a transient burst — retrying THAT
+would just waste time hitting the same wall again, the identical reasoning
+`GroqModelClient`'s own docstring already gives. No retry at all was rejected because it
+throws away real, working repair attempts to a one-off server hiccup that a second
+attempt (unlike a real 429) is very likely to resolve.
+
+**Fixed by** adding `_post_with_retry` to `GeminiModelClient`, retrying only when
+`status_code < 500` is false (i.e. only 5xx), with a short fixed backoff (`5.0s`, capped
+by construction since it's a fixed value, not a header-driven one — no D53-style
+uncapped-header risk exists here to begin with) and a `log.warning` before each sleep. A
+429 falls straight through the `status_code < 500` check on its very first attempt and
+raises immediately via the existing `raise_for_status()`, exactly as before this change.
+
+**Interview:** "The same day I fixed one client's retry logic for being too aggressive
+(D53 — Groq slept too long on real 429s), I found the other client's retry logic was
+completely absent, and it failed on the FIRST transient hiccup that a retry would have
+just solved. The two fixes look like opposites but share one rule: retry a condition you
+expect to resolve on its own (a 5xx, a short burst), fail fast and loud on one you know
+won't (a real quota wall) — treating every non-2xx response the same way is wrong in both
+directions."
+
+---
+
 ## Template
 
 ```

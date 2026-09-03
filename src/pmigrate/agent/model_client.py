@@ -111,6 +111,18 @@ class GeminiModelClient:
     # the common case, since cost is billed on actual tokens used, not this ceiling.
     max_output_tokens: int = 32768
 
+    # docs/decisions.md D54: found live — a bare `requests.post` here meant a single
+    # transient 5xx (Gemini's servers occasionally return 503 Service Unavailable with no
+    # quota implication at all) failed the WHOLE repo outright, same as a real error would.
+    # Retries ONLY on 5xx — a 429 here is deliberately NOT retried: D48 already established
+    # Gemini's free-tier 429 is a persistent daily-quota wall, not a transient burst, so
+    # retrying it would just waste time (the same reasoning GroqModelClient's own docstring
+    # gives, one class down). Fixed short backoff, not header-driven — Gemini's 5xx
+    # responses carry no Retry-After equivalent to key off, so there's no D53-style
+    # uncapped-header risk here to begin with.
+    _MAX_RETRIES: int = 3
+    _RETRY_DELAY_S: float = 5.0
+
     @classmethod
     def from_env(cls, model: str = "gemini-3.6-flash") -> GeminiModelClient:
         key = os.environ.get("GEMINI_API_KEY")
@@ -118,12 +130,25 @@ class GeminiModelClient:
             raise ValueError("GEMINI_API_KEY not set")
         return cls(api_key=key, model=model)
 
+    def _post_with_retry(self, url: str, body: dict[str, Any]) -> requests.Response:
+        for attempt in range(self._MAX_RETRIES + 1):
+            resp = requests.post(url, params={"key": self.api_key}, json=body, timeout=120)
+            if resp.status_code < 500 or attempt == self._MAX_RETRIES:
+                return resp
+            log.warning(
+                "model_client.transient_server_error",
+                attempt=attempt,
+                status_code=resp.status_code,
+                sleeping_s=self._RETRY_DELAY_S,
+            )
+            time.sleep(self._RETRY_DELAY_S)
+        return resp  # unreachable — loop always returns on its last iteration
+
     def complete(self, system: str, prompt: str) -> ModelResponse:
         url = f"{GEMINI_API_BASE}/models/{self.model}:generateContent"
-        resp = requests.post(
+        resp = self._post_with_retry(
             url,
-            params={"key": self.api_key},
-            json={
+            {
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"parts": [{"text": prompt}]}],
                 # temperature=0 per PLAN.md invariant I6 ("every scored run is
@@ -135,7 +160,6 @@ class GeminiModelClient:
                 # exists to eliminate for anything this project reports a number on.
                 "generationConfig": {"maxOutputTokens": self.max_output_tokens, "temperature": 0},
             },
-            timeout=120,
         )
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()

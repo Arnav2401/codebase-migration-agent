@@ -80,6 +80,53 @@ def test_from_env_raises_when_key_missing(monkeypatch: pytest.MonkeyPatch) -> No
         GeminiModelClient.from_env()
 
 
+def test_gemini_retries_a_transient_5xx_and_succeeds() -> None:
+    # docs/decisions.md D54: the exact real shape observed live -- a 503 Service
+    # Unavailable with no quota implication at all, distinct from a 429.
+    body = {
+        "candidates": [{"content": {"parts": [{"text": "OK"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1},
+    }
+    responses = [_response(503), _response(**body)]
+    client = GeminiModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", side_effect=responses),
+        patch("pmigrate.agent.model_client.time.sleep") as mock_sleep,
+    ):
+        result = client.complete(system="sys", prompt="prompt")
+
+    assert result.text == "OK"
+    mock_sleep.assert_called_once_with(GeminiModelClient._RETRY_DELAY_S)
+
+
+def test_gemini_does_not_retry_a_429_quota_error() -> None:
+    # docs/decisions.md D48: Gemini's free-tier 429 is a persistent daily-quota wall, not
+    # a transient burst -- retrying it wastes time instead of fixing anything, so this
+    # must raise on the FIRST attempt, unlike the 503 case above.
+    responses = [_response(429)]
+    client = GeminiModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", side_effect=responses) as mock_post,
+        patch("pmigrate.agent.model_client.time.sleep") as mock_sleep,
+        pytest.raises(Exception, match="HTTP 429"),
+    ):
+        client.complete(system="sys", prompt="prompt")
+
+    assert mock_post.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_gemini_gives_up_after_max_retries_on_persistent_5xx() -> None:
+    responses = [_response(503) for _ in range(10)]  # more than _MAX_RETRIES + 1
+    client = GeminiModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", side_effect=responses),
+        patch("pmigrate.agent.model_client.time.sleep"),
+        pytest.raises(Exception, match="HTTP 503"),
+    ):
+        client.complete(system="sys", prompt="prompt")
+
+
 def test_groq_complete_returns_text_and_cost_from_real_response_shape() -> None:
     # the exact shape returned by a real chat/completions call (verified live against
     # openai/gpt-oss-120b before wiring this in — docs/decisions.md D48)
