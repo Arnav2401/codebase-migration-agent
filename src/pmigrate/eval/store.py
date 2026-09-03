@@ -170,6 +170,20 @@ class ResultStore:
             return None
         return _result_from_dict(json.loads(row[0]))
 
+    def load_all(self, *, corpus_sha: str | None = None) -> list[RepoResult]:
+        """Every stored result, across every config -- docs/decisions.md D65's
+        `write_main_report` needs this to combine arms, the one need D63 deliberately
+        deferred building ("a natural next step for the report generator"). Optionally
+        scoped to one `corpus_sha` -- combining results scored against different corpus
+        content into one report would silently mix runs that aren't comparable."""
+        if corpus_sha is not None:
+            rows = self._conn.execute(
+                "SELECT result_json FROM results WHERE corpus_sha = ?", (corpus_sha,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT result_json FROM results").fetchall()
+        return [_result_from_dict(json.loads(row[0])) for row in rows]
+
     def save_result(self, result: RepoResult, corpus_sha: str, *, written_at: float) -> None:
         self._conn.execute(
             """

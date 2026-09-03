@@ -143,3 +143,30 @@ def test_a_result_with_no_repairs_or_diff_similarity_round_trips(tmp_path: Path)
 
     loaded = store.load_result("acme__widgets", config_hash(result.config), "deadbeef")
     assert loaded == result
+
+
+def test_load_all_returns_every_stored_result(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path / "results.db")
+    a = _result("acme__a")
+    b = _result("acme__b", config=_config(retrieval="wholefile"))
+    store.save_result(a, "deadbeef", written_at=1.0)
+    store.save_result(b, "deadbeef", written_at=2.0)
+
+    loaded = store.load_all()
+
+    assert {r.repo_id for r in loaded} == {"acme__a", "acme__b"}
+
+
+def test_load_all_returns_empty_list_when_the_store_is_empty(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path / "results.db")
+    assert store.load_all() == []
+
+
+def test_load_all_filters_by_corpus_sha_when_given(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path / "results.db")
+    store.save_result(_result("acme__a"), "sha-one", written_at=1.0)
+    store.save_result(_result("acme__b"), "sha-two", written_at=2.0)
+
+    loaded = store.load_all(corpus_sha="sha-one")
+
+    assert [r.repo_id for r in loaded] == ["acme__a"]

@@ -1,4 +1,4 @@
-.PHONY: setup neo4j neo4j-down lint format typecheck test corpus corpus-baselines eval clean
+.PHONY: setup neo4j neo4j-down lint format typecheck test corpus corpus-baselines eval eval-report clean
 
 # .venv lives at .venv.nosync, symlinked as .venv: on machines where this repo sits under
 # ~/Documents, something (observed: not iCloud itself per `brctl status`, but never
@@ -49,6 +49,9 @@ corpus-baselines:
 
 eval:
 	.venv/bin/python -m pmigrate.eval.run --config $(CONFIG) --split $(SPLIT)
+
+eval-report:
+	.venv/bin/python -m pmigrate.eval.report_cli
 
 clean:
 	find . -name '__pycache__' -exec rm -rf {} +

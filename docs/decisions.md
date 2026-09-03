@@ -2794,6 +2794,63 @@ would have been decoration, not measurement."
 
 ---
 
+## D65 — Bootstrap CIs: percentile method, seeded, scoped to pass_rate/full_green only
+
+**Alternatives:** a normal-approximation interval (mean ± 1.96·SE) — rejected because
+phase-5-eval.md's own stated situation (N in the tens, per-repo pass rates plausibly
+non-normal — a repo is either near-0, mid-range, or near-1, not smoothly distributed) is
+exactly when that approximation is least trustworthy; the percentile bootstrap makes no
+distributional assumption at all. numpy for the resampling — rejected for the same reason
+D61's `_cosine_similarity` already gave: a few thousand resamples over a few dozen values
+has no real performance case for a new dependency when `random.Random` is fine. Bootstrap
+CIs on every numeric metric (diff-similarity too) — considered and rejected (user
+decision): phase-5-eval.md frames CIs specifically around "fraction of tests passing" and
+"fraction of repos fully green," and widening the headline table to CI every column would
+report confidence intervals phase-5-eval.md never asked for, on metrics (diff-similarity)
+that are supplementary, not the resume claim.
+
+**Why:** the resampling itself needs to be reproducible independent of anything about the
+agent run it's summarizing — invariant I6 applies to the STATISTICS step too, not just the
+migration loop. Using `EvalConfig.seed` for both would be a layering mistake: a config
+change made for a completely different reason (a different LLM seed) would silently also
+change the reported CI width, making two runs' CIs incomparable for a reason that has
+nothing to do with the actual resampling. A fixed, independent seed (`bootstrap_mean_ci`'s
+own `seed: int = 0` default) keeps the two concerns separate.
+
+**Fixed by** `eval/stats.py`'s `bootstrap_mean_ci` (percentile bootstrap, 10000 resamples
+default, `n=1` collapses to the point estimate rather than fabricating spread from a
+single value that can't vary under resampling) and `eval/report.py`'s `write_main_report`,
+which calls it once per arm for `pass_rate` and once for `full_green` (as 0.0/1.0, the
+standard way to bootstrap a CI on a proportion) — an arm with zero repos is reported as
+"no repos scored" rather than crashing on the empty-input check `bootstrap_mean_ci` raises
+for everything else. `ResultStore.load_all` (`eval/store.py`) is the one new method needed
+to feed it — D63 deliberately deferred building this ("a natural next step for the report
+generator"), and this is that step. `eval/report_cli.py`'s `pmigrate eval report` is the
+CLI wiring: loads every result scoped to the CURRENT `corpus/manifest.json`'s content hash
+(not every row the store has ever seen — mixing results scored against a since-changed
+corpus would combine runs that were never actually comparable), groups by arm name, writes
+`docs/results/main.md`.
+
+**Verified live, not just by pytest:** a real `make eval CONFIG=graph` run (7 repos, real
+Docker + real Gemini calls, hitting the same known 429 quota wall D48/D64 already
+documented) followed by `pmigrate eval report` produced a real headline row — pass_rate
+0.266 with a 95% CI of `[0.003, 0.546]` at N=7. That interval is wide, exactly matching
+phase-5-eval.md's own point ("With N≈34 the interval is roughly ±15 points... state it") —
+a small N produces a wide interval, and the report states the actual computed width rather
+than a number borrowed from the spec's own illustration. That smoke-test output was
+deleted afterward, not committed, for the same reason D64's was: real but incomplete, not
+the deliberate full-matrix measurement this report exists to eventually publish.
+
+**Interview:** "The full_green CI for this smoke test came out as `[0.000, 0.000]` — every
+one of the 7 repos failed to go fully green, so every bootstrap resample is also all
+zeros, and the interval correctly collapses to a point at 0 rather than reporting some
+invented spread. That's not a bug; it's the bootstrap being honest that there's no
+variance to report when every observation agrees. It's also exactly why the report
+insists on printing N next to every CI — a `[0.000, 0.000]` interval from 7 repos and one
+from 340 repos are very different claims wearing the same notation."
+
+---
+
 ## Template
 
 ```

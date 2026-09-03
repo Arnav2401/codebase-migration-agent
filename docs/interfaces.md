@@ -445,21 +445,26 @@ writes real failure text + predicted class to a JSONL side-channel — the seed 
 phase-4-triage.md's "≥100 hand-labelled failures" needed, now hand-labelled and closed
 out (D55/D56). D62 made `tiers={"T1"}`/`{"T2","T3"}` real arms alongside the full set
 (any other combination still raises `NotImplementedError` — `repair()` fuses T2/T3 into
-one node, so a set naming one but not the other can't be honored). D63 (this step) added
+one node, so a set naming one but not the other can't be honored). D63 added
 `eval/store.py`'s `ResultStore`/`ResumeContext` (the SQLite result store, keyed by
 `(repo_id, config_hash, corpus_sha)`, wired into `run_corpus` via its new `resume`
 param) and `eval/manifest.py`'s `RunManifest`/`write_run_manifest` (the run manifest —
-corpus sha256, prompt hashes, model, seed, agent git sha, start/end time). D64 (this step)
-closed the `make eval` gap: `eval/run.py`'s `pmigrate eval run` (registered in `cli.py`,
-also runnable as `python -m pmigrate.eval.run`) loads `configs/<name>.json` (JSON, not
-YAML — round-trips through `EvalConfig.to_dict`/`from_dict` directly, no new dependency),
+corpus sha256, prompt hashes, model, seed, agent git sha, start/end time). D64 closed the
+`make eval` gap: `eval/run.py`'s `pmigrate eval run` (registered in `cli.py`, also
+runnable as `python -m pmigrate.eval.run`) loads `configs/<name>.json` (JSON, not YAML —
+round-trips through `EvalConfig.to_dict`/`from_dict` directly, no new dependency),
 dispatches a real `ModelClient` via an explicit whitelist keyed by `config.model`
 (`GeminiModelClient`/`GroqModelClient` — the only two real clients this project has),
 wires up a real `DockerSandbox`, writes the run manifest before/after via
-`eval/manifest.py`, and writes `docs/results/<config>.md` via the new
-`eval/report.py`. Verified live end-to-end, including a real resumed second invocation
-(D64's own decision entry has the numbers). Still missing from the full sketch:
-parallelism over Docker, the `model_*` arm's Claude/GPT/local-Llama clients (`model_groq`
-is the one real second-provider config today), and `docs/results/main.md`'s
-cross-arm combination with bootstrap 95% CIs — phase-5-eval.md scopes CIs to that
-combined report specifically, not to any single arm's own table.
+`eval/manifest.py`, and writes `docs/results/<config>.md` via `eval/report.py`. D65 (this
+step) closed the cross-arm gap: `eval/stats.py`'s `bootstrap_mean_ci` (percentile
+bootstrap, seeded independent of `EvalConfig.seed` — I6 applies to the statistics too, not
+just the agent run), `ResultStore.load_all` (the method D63 deliberately deferred), and
+`eval/report.py`'s new `write_main_report` combine every arm's stored results into one
+headline table (mean pass_rate and full_green fraction, each with a 95% CI) plus a
+per-repo appendix — `eval/report_cli.py`'s `pmigrate eval report` is the CLI wiring,
+scoped to the current corpus manifest's content hash. Verified live end-to-end at every
+step (D64's/D65's own decision entries have the numbers, including a real resumed second
+`eval run` invocation and a real, appropriately wide CI at N=7). Still missing from the
+full sketch: parallelism over Docker, and the `model_*` arm's Claude/GPT/local-Llama
+clients (`model_groq` is the one real second-provider config today).
