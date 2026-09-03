@@ -1,0 +1,9 @@
+{
+  "name": "model_groq",
+  "model": "openai/gpt-oss-120b",
+  "retrieval": "graph",
+  "tiers": ["T1", "T2", "T3"],
+  "triage": true,
+  "seed": 0,
+  "usd_cap_per_repo": 5.0
+}

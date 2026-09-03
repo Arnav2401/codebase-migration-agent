@@ -1,0 +1,9 @@
+{
+  "name": "t1_only",
+  "model": "gemini-3.6-flash",
+  "retrieval": "graph",
+  "tiers": ["T1"],
+  "triage": true,
+  "seed": 0,
+  "usd_cap_per_repo": 5.0
+}

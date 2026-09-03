@@ -22,6 +22,14 @@ corpus/candidates.jsonl
 # traces are large and regenerable; keep docs/results/ (the generated tables) committed
 traces/
 
+# eval harness run state (docs/decisions.md D64): the SQLite result store and per-repo
+# checkouts/overlays are large, machine-local, and rebuilt by `make eval` from
+# corpus/manifest.json + configs/*.json -- same "regenerable, don't commit" category as
+# corpus/checkouts/ and traces/ above. docs/results/*.md and *.manifest.json (the actual
+# deliverable) are NOT ignored -- committed deliberately once a run's numbers are real.
+eval_results.db
+eval_work/
+
 .DS_Store
 
 # Claude Code local session settings — personal, not project config

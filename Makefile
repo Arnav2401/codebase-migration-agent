@@ -48,7 +48,7 @@ corpus-baselines:
 	.venv/bin/python -m pmigrate.corpus.capture_baselines --manifest corpus/manifest.json
 
 eval:
-	.venv/bin/python -m pmigrate.eval.harness --config $(CONFIG) --split $(SPLIT)
+	.venv/bin/python -m pmigrate.eval.run --config $(CONFIG) --split $(SPLIT)
 
 clean:
 	find . -name '__pycache__' -exec rm -rf {} +

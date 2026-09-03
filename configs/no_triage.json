@@ -1,0 +1,9 @@
+{
+  "name": "no_triage",
+  "model": "gemini-3.6-flash",
+  "retrieval": "graph",
+  "tiers": ["T1", "T2", "T3"],
+  "triage": false,
+  "seed": 0,
+  "usd_cap_per_repo": 5.0
+}

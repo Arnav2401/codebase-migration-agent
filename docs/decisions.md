@@ -2723,6 +2723,77 @@ cells re-run for real."
 
 ---
 
+## D64 — `make eval` CLI: JSON configs, an explicit model whitelist, no CI in per-arm reports
+
+**Alternatives:** YAML config files — rejected, `pyproject.toml` has no YAML dependency
+and JSON round-trips through `EvalConfig.to_dict`/`from_dict` (D63) that already exist,
+so YAML would add a parser this project has no other use for just to match an assumption
+("configs are usually YAML") nothing in phase-5-eval.md actually requires. Dispatching a
+real `ModelClient` by guessing from `config.model`'s string shape (e.g. "starts with
+'gemini'") — rejected as the same kind of unearned precision D62 already refused for
+`tiers`: this project has exactly two verified real clients (Gemini, Groq), and a prefix
+rule would silently "succeed" at building the wrong thing for any third model string
+someone typed, rather than failing loudly the way an explicit whitelist does. Computing a
+bootstrap CI per-arm report too, not just deferring it to `main.md` — rejected as scope
+creep past what a CLI entrypoint needs to exist at all; phase-5-eval.md itself scopes CIs
+to the cross-arm headline table, and a per-repo table is already an honest artifact
+without one (its own words: "publish the full per-repo table so nobody has to trust the
+aggregate").
+
+**Why:** phase-5-eval.md's deliverable is literally `make eval CONFIG=... SPLIT=...` —
+before this step the Makefile's `eval:` target pointed at
+`python -m pmigrate.eval.harness`, a module with no `__main__` at all; it had never
+actually run. Closing that gap needed three things wired together for the first time in
+one place: a real `Sandbox` (`DockerSandbox`, already built, never invoked outside
+`capture_baselines.py`'s separate Phase-0 flow), a real `ModelClient` (`GeminiModelClient`/
+`GroqModelClient`, already built, never selected by config rather than hand-constructed),
+and every Phase 5 piece from the last two steps (`EvalConfig`, `run_corpus`,
+`ResultStore`/`ResumeContext`, `RunManifest`). None of those needed new capabilities —
+this step is genuinely just the last wiring, plus the one new small piece
+(`eval/report.py`) needed to satisfy "writes docs/results/*.md."
+
+`config: str = typer.Option(...)` (not a plain default) on `main` is deliberate, not
+boilerplate: a bare `config: str` with no default is inferred by typer as a POSITIONAL
+argument, which would have silently broken the `--config $(CONFIG)` flag form
+phase-5-eval.md's own deliverable line uses — caught by testing the CLI's actual argument
+shape via `CliRunner`, not just its Python-level logic.
+
+**Fixed by** `src/pmigrate/eval/run.py` (`pmigrate eval run`, registered in `cli.py`
+exactly like `corpus`/`triage`, plus its own `app = typer.Typer()` for standalone
+`python -m pmigrate.eval.run` — matching `capture_baselines.py`'s established
+dual-invocation pattern) and `configs/*.json`, one file per phase-5-eval.md ablation arm
+(`graph`, `wholefile`, `embedding`, `t1_only`, `no_t1`, `no_triage`, `model_groq` — the
+`model_*` row's one real data point today; Claude/GPT/local-Llama clients stay separately
+tracked backlog). `eval/report.py`'s `write_results_table` writes the per-repo table plus
+an unweighted mean/count aggregate, explicitly declining to compute a CI it has no
+statistical basis to report on N=1 arm in isolation. `load_dotenv()` was added to
+`eval/run.py` (matching `corpus/github_client.py`'s existing convention) after a live
+smoke test showed real API keys living in `.env`, not the shell environment, would
+otherwise never reach `GeminiModelClient.from_env()`/`GroqModelClient.from_env()` — a real
+gap the first live run surfaced, not something planned in the original proposal.
+
+**Verified live, not just by pytest:** `make eval CONFIG=graph SPLIT=dev` actually ran —
+real Docker builds, a real Gemini API call (hitting the same 429 daily-quota wall D48
+already documented, not a new bug), `docs/results/graph.md` and `.manifest.json` written,
+`eval_results.db` populated. A second invocation of the identical command hit
+`harness.skip_already_scored` for all 7 repos and returned in well under a second instead
+of ~2 minutes — resumability (D63) confirmed working end-to-end, not just in unit tests
+against `FakeSandbox`. That smoke-test output was deleted afterward rather than committed
+(`eval_results.db`/`eval_work/` added to `.gitignore` alongside `corpus/checkouts/` and
+`traces/`) — it's real but incomplete (one arm, one noisy run against a known-unreliable
+free tier), not the deliberate full-matrix measurement `docs/results/main.md` is for.
+
+**Interview:** "The riskiest-looking part of this — dispatching to a real model client —
+turned out to be the least interesting decision, because there are only two real clients
+to dispatch to; an explicit dict is more honest than a rule that would look more general
+while actually being a guess. The part worth defending is what I DIDN'T build: a per-arm
+CI. It would have been easy to compute *something* and print it, but a confidence interval
+over one arm's own repos isn't the number phase-5-eval.md is asking for — that number
+lives in `main.md`, once every arm's results exist to bootstrap over. Printing a CI here
+would have been decoration, not measurement."
+
+---
+
 ## Template
 
 ```
