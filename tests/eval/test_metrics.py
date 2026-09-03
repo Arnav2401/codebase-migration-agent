@@ -4,7 +4,13 @@ import pytest
 
 from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.state import RepairAttempt
-from pmigrate.eval.metrics import ScoredRepairAttempt, fix_success_table, score_run
+from pmigrate.eval.metrics import (
+    ScoredRepairAttempt,
+    classifier_accuracy,
+    fix_success_table,
+    score_run,
+)
+from pmigrate.triage.label import LabelledFailure
 from pmigrate.types import (
     BaselineResult,
     Diagnosis,
@@ -371,3 +377,32 @@ def test_fix_success_table_fix_rate_is_zero_when_nothing_applied() -> None:
 
 def test_fix_success_table_is_empty_for_no_scores() -> None:
     assert fix_success_table([]) == {}
+
+
+def _labelled(predicted: FailureClass, true: FailureClass) -> LabelledFailure:
+    return LabelledFailure(
+        repo_id="acme__widgets", node_id="t.py::a", predicted_cls=predicted, true_cls=true, text="x"
+    )
+
+
+def test_classifier_accuracy_is_zero_for_no_labelled_data() -> None:
+    # must never look like 100% -- "nothing measured" and "perfect" are not the same thing.
+    assert classifier_accuracy([]) == 0.0
+
+
+def test_classifier_accuracy_is_one_when_every_prediction_matches() -> None:
+    labelled = [
+        _labelled(FailureClass.IMPORT_ERROR, FailureClass.IMPORT_ERROR),
+        _labelled(FailureClass.UNKNOWN, FailureClass.UNKNOWN),
+    ]
+    assert classifier_accuracy(labelled) == 1.0
+
+
+def test_classifier_accuracy_reflects_a_partial_match_rate() -> None:
+    labelled = [
+        _labelled(FailureClass.IMPORT_ERROR, FailureClass.IMPORT_ERROR),
+        _labelled(FailureClass.UNKNOWN, FailureClass.VALIDATION_BEHAVIOUR),  # misclassified
+        _labelled(FailureClass.CLASS_DEF_ERROR, FailureClass.CLASS_DEF_ERROR),
+        _labelled(FailureClass.UNKNOWN, FailureClass.IMPORT_ERROR),  # misclassified
+    ]
+    assert classifier_accuracy(labelled) == pytest.approx(0.5)

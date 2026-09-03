@@ -29,7 +29,22 @@ from typing import Any
 from pmigrate.agent.state import RepairAttempt
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import group_raw_failures
+from pmigrate.triage.label import LabelledFailure
 from pmigrate.types import FailureClass, RepoSpec, TestOutcome
+
+
+def classifier_accuracy(labelled: Sequence[LabelledFailure]) -> float:
+    """docs/phase-4-triage.md acceptance criterion: >=85% on >=100 hand-labelled real
+    failures. Pure comparison of `predicted_cls` vs `true_cls` -- the human judgment that
+    produces `true_cls` lives entirely in `triage/label.py`'s interactive tool (which
+    deliberately never sees `predicted_cls` while asking), so this function can't be the
+    thing that accidentally makes the check circular. 0.0 on an empty input rather than
+    raising or reporting 100% -- "no labelled data" and "perfect accuracy" must never
+    look the same."""
+    if not labelled:
+        return 0.0
+    correct = sum(1 for lf in labelled if lf.predicted_cls == lf.true_cls)
+    return correct / len(labelled)
 
 
 @dataclass(frozen=True)

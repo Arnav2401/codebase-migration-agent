@@ -2262,6 +2262,46 @@ directions."
 
 ---
 
+## D55 — Hand-label by group, not by raw failure; hide `predicted_cls` while asking
+
+**Alternatives:** hand-label all 411 raw failures individually; show the classifier's own
+`predicted_cls` alongside each failure and ask the labeller to confirm or correct it.
+
+**Why:** `triage_failures_dev.jsonl` has 411 raw failures but only 23 distinct
+`(predicted_cls, deepest_first_party_frame)` groups — the same key `group_raw_failures`
+already uses in production — with one repo (`okfn__opendataeditor`) alone accounting for
+270 of them via a single recurring root cause. Labelling all 411 individually would be
+almost entirely repetition with no added signal, and would make the ≥100-failure
+acceptance criterion far more tedious than the actual number of real decisions involved.
+Showing `predicted_cls` upfront was rejected for a different reason: it would anchor the
+labeller toward confirming the classifier's own guess, which turns "independent accuracy
+check" into "how often do I agree with the tool when it tells me its answer first" — a
+softer, less honest question than the one `docs/phase-4-triage.md` actually asks.
+
+**Fixed by** `pmigrate triage label` (`triage/label.py`): groups raw failures by the same
+key as production grouping, shows one representative traceback per group (with an
+in-session 's' command to see another sample from a large group before answering),
+prompts for the true class blind, and on answer writes that label to EVERY raw failure in
+the group. `classifier_accuracy` (`eval/metrics.py`) then compares `predicted_cls` vs
+`true_cls` per raw failure — so the ≥100-failure count and the accuracy rate both operate
+on the same real unit the criterion specifies, even though only ~23 judgment calls
+produced them.
+
+**Known limitation, stated rather than hidden:** this assumes every member of a group
+truly shares one true class. If the grouping logic itself ever merges two genuinely
+different problems under one root frame, that error propagates into every member's label
+silently — the tool surfaces group size so a labeller can judge whether a large group
+looks suspiciously heterogeneous, but doesn't force a split.
+
+**Interview:** "Once I had two candidate designs, the one to reject was the one that let
+me see the classifier's own answer before giving mine — that's not a subtle bias, it's the
+whole test failing to test anything. The group-based shortcut is a real trade-off, not a
+free lunch: it trades some risk of missing a bad grouping for making 411 decisions into
+23, and I made that trade explicitly rather than let 'labelling is tedious' quietly turn
+into 'labelling didn't happen.'"
+
+---
+
 ## Template
 
 ```
