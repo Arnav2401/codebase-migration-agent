@@ -1,0 +1,33 @@
+import pytest
+
+from pmigrate.eval.config import EvalConfig
+
+
+def test_default_config_constructs_with_the_currently_implemented_axes() -> None:
+    config = EvalConfig(name="graph", model="gemini-3.6-flash")
+    assert config.retrieval == "graph"
+    assert config.tiers == frozenset({"T1", "T2", "T3"})
+    assert config.triage is True
+    assert config.seed == 0
+
+
+def test_triage_off_config_constructs_fine() -> None:
+    config = EvalConfig(name="no_triage", model="gemini-3.6-flash", triage=False)
+    assert config.triage is False
+
+
+def test_non_graph_retrieval_raises_not_implemented() -> None:
+    with pytest.raises(NotImplementedError, match="retrieval"):
+        EvalConfig(name="embedding", model="gemini-3.6-flash", retrieval="embedding")
+
+
+def test_partial_tier_set_raises_not_implemented() -> None:
+    with pytest.raises(NotImplementedError, match="tiers"):
+        EvalConfig(name="t1_only", model="gemini-3.6-flash", tiers=frozenset({"T1"}))
+
+
+def test_config_is_hashable_for_future_resumability_keying() -> None:
+    # phase-5-eval.md: "store results in SQLite keyed by (repo_id, config_hash,
+    # corpus_sha)" -- a later step, but the type needs to support it now.
+    config = EvalConfig(name="graph", model="gemini-3.6-flash")
+    hash(config)  # must not raise

@@ -2356,6 +2356,52 @@ reverse-engineered from a spreadsheet."
 
 ---
 
+## D57 — Phase 5 opens: `EvalConfig`/`RepoResult` supersede `RepoScore`
+
+**Alternatives:** leave `RepoScore` as-is and add a separate `RepoResult` wrapper around
+it for Phase 5's new fields; rename `RepoResult`'s fields to match interfaces.md's
+original `usd`/`failure_classes` sketch instead of keeping `RepoScore`'s established names;
+build the full `EvalConfig` behavior (real `retrieval`/`tiers` support) now instead of
+gating it behind `NotImplementedError`.
+
+**Why:** Phase 4 closed with all five acceptance criteria met (D51-D56), which per
+CLAUDE.md's build order unlocks Phase 5. `interfaces.md §8` already sketches the full
+`EvalConfig`/`RepoResult` shape Phase 5 needs; D40's `RepoScore` was explicitly a strict
+subset of it, built early only because Phase 4 needed SOME way to score a run. A second,
+parallel `RepoResult` type wrapping `RepoScore` was rejected: two types tracking
+overlapping "how did this repo do" data is the exact duplication CLAUDE.md's "never
+compute a metric in more than one place" rule exists to prevent — some caller would
+eventually read the wrong one. Renaming to interfaces.md's older field names was rejected
+as pure churn: that sketch predates the real implementation, and `usd_spent`/
+`final_diagnosis_counts` are already used throughout the codebase and test suite for zero
+functional gain from renaming. Building real `retrieval`/`tiers` support now was rejected
+because there's no evidence yet to design an embedding-retrieval or T1-only harness
+against — the same "only build what real evidence justifies" stance `triage/rules.py`
+already takes for classification rules.
+
+**Fixed by** `eval/config.py`'s `EvalConfig` (full field set, `__post_init__` raises
+`NotImplementedError` for any `retrieval`/`tiers` value beyond today's implicit ones —
+schema settled, implementation honest about what's not built) and `eval/metrics.py`'s
+`RepoResult` (renamed from `RepoScore`, now carrying `config: EvalConfig` instead of a
+bare `use_triage: bool`, plus `diff_line_jaccard`/`symbol_precision`/`symbol_recall`/
+`trace_path` as `float | None`/`str | None` — `None`, not `0.0`, since a real zero
+measurement must stay distinguishable from "not computed yet," the same reasoning
+`classifier_accuracy` already applies to "no labelled data"). `eval/harness.py`'s
+`run_repo`/`run_corpus` take `config: EvalConfig` (no default — `EvalConfig` has no
+universal sensible default, so every real call site must say what it's running);
+`config.usd_cap_per_repo` now drives the default `BudgetState.usd_cap` when the caller
+doesn't pass one explicitly.
+
+**Interview:** "Phase 4 grew `RepoScore` organically, one field at a time, as each
+acceptance criterion needed something new — which is correct incrementalism, but it left
+a type that only accidentally resembled Phase 5's actual planned shape. Opening Phase 5
+was the right moment to reconcile the two deliberately rather than let them drift further
+apart: one canonical result type, a config schema that's honest about which axes are real
+versus placeholder, and zero renamed fields that would've cost real churn for zero
+behavior change."
+
+---
+
 ## Template
 
 ```

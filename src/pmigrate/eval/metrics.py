@@ -2,13 +2,14 @@
 place). Every function here is pure — given a `RepoSpec` and the graph's final state,
 returns a number. No I/O, no printing, no Docker.
 
-docs/decisions.md D40: this is Phase 4's minimal slice, not Phase 5's full
-`EvalConfig`/`RepoResult` sketch (interfaces.md §8) — `diff_line_jaccard` and
-`symbol_precision`/`recall` are deliberately absent (Phase 5 ablation-comparison metrics
-Phase 4's own acceptance criteria don't need). Per-class fix-success counts, originally on
-this same "not in this pass" list, are no longer absent: D51 gave `AgentState` the
-repair-attempt history this needed, and `ScoredRepairAttempt`/`fix_success_table` below
-are the join.
+docs/decisions.md D40/D57: `RepoResult` (renamed from Phase 4's `RepoScore`) is now
+Phase 5's full sketch from interfaces.md §8, carrying an `EvalConfig` instead of a bare
+`use_triage: bool` — `diff_line_jaccard`/`symbol_precision`/`symbol_recall`/`trace_path`
+exist as `| None` fields (that later Phase 5 components will populate) rather than being
+absent, since a missing field would be a breaking change to add later where `None` isn't.
+Per-class fix-success counts, once on this "not in this pass" list, are no longer absent:
+D51 gave `AgentState` the repair-attempt history this needed, and
+`ScoredRepairAttempt`/`fix_success_table` below are the join.
 
 docs/decisions.md D46: reads `final_state["cumulative_outcomes"]`, NOT
 `final_state["last_run"].outcomes` — `last_run` is only the most recent (often
@@ -27,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pmigrate.agent.state import RepairAttempt
+from pmigrate.eval.config import EvalConfig
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import group_raw_failures
 from pmigrate.triage.label import LabelledFailure
@@ -89,7 +91,7 @@ class ClassFixSuccess:
     ACROSS repos by `fix_success_table` below, not per-repo (a single repo rarely has
     enough attempts of one class for a rate to mean anything)."""
 
-    cls: FailureClass | None  # None groups every use_triage=False attempt (no single class)
+    cls: FailureClass | None  # None groups every config.triage=False attempt (no single class)
     attempts: int
     applied: int  # attempts where an edit actually landed, whether or not it fixed anything
     fixed: int
@@ -99,14 +101,14 @@ class ClassFixSuccess:
         return self.fixed / self.applied if self.applied else 0.0
 
 
-def fix_success_table(scores: Sequence[RepoScore]) -> dict[FailureClass | None, ClassFixSuccess]:
+def fix_success_table(results: Sequence[RepoResult]) -> dict[FailureClass | None, ClassFixSuccess]:
     """The actual artefact docs/phase-4-triage.md calls "the single most valuable
     artefact in the project for interviews" -- one row per FailureClass, counting every
-    scored repair attempt across the whole corpus run (both use_triage arms mixed
-    together unless the caller filters `scores` first)."""
+    scored repair attempt across the whole corpus run (both `config.triage` arms mixed
+    together unless the caller filters `results` first)."""
     counts: dict[FailureClass | None, tuple[int, int, int]] = {}
-    for score in scores:
-        for scored in score.scored_repairs:
+    for result in results:
+        for scored in result.scored_repairs:
             key = scored.attempt.cls
             attempts, applied, fixed = counts.get(key, (0, 0, 0))
             attempts += 1
@@ -120,9 +122,16 @@ def fix_success_table(scores: Sequence[RepoScore]) -> dict[FailureClass | None, 
 
 
 @dataclass(frozen=True)
-class RepoScore:
+class RepoResult:
+    """Phase 5's full result type (interfaces.md §8), superseding Phase 4's `RepoScore`
+    (docs/decisions.md D40/D57) — one type, not two, per CLAUDE.md's "never compute a
+    metric in more than one place" rule. Keeps `RepoScore`'s established field names
+    (`usd_spent`, `final_diagnosis_counts`) rather than interfaces.md's original
+    `usd`/`failure_classes` sketch — renaming now would be pure churn across every call
+    site for zero functional benefit, since the sketch predates the real implementation."""
+
     repo_id: str
-    use_triage: bool  # which ablation arm produced this score (docs/decisions.md D40)
+    config: EvalConfig  # which ablation arm produced this result (docs/decisions.md D40/D57)
     pass_rate: float  # |baseline.passed ∩ still-passing| / |baseline.passed| (I4)
     full_green: bool  # pass_rate >= 1.0
     iterations: int
@@ -138,11 +147,19 @@ class RepoScore:
     # no last_run yet) — distinct from 1.0, which means every failure got its own diagnosis.
     avg_failures_per_diagnosis: float
     scored_repairs: tuple[ScoredRepairAttempt, ...]
+    # docs/decisions.md D57: None, not 0.0, until the diff-similarity component (a later
+    # Phase 5 step) actually computes these — a real 0.0 (e.g. zero symbol overlap) must
+    # stay distinguishable from "not measured yet," the same reasoning classifier_accuracy
+    # above already applies to "no labelled data" vs "100% accuracy."
+    diff_line_jaccard: float | None = None
+    symbol_precision: float | None = None
+    symbol_recall: float | None = None
+    trace_path: str | None = None  # Phase 6 concept; stays None until that phase unlocks
 
 
 def score_run(
-    repo: RepoSpec, final_state: Any, wallclock_s: float, *, use_triage: bool
-) -> RepoScore:
+    repo: RepoSpec, final_state: Any, wallclock_s: float, *, config: EvalConfig
+) -> RepoResult:
     """`final_state` is whatever `build_migration_graph(...).invoke(...)` returns —
     typed `Any` here for the same reason `agent/graph.py` types the compiled graph
     itself `Any`: LangGraph's runtime return shape (a dict keyed by `AgentState`'s
@@ -173,9 +190,9 @@ def score_run(
     repair_attempts = final_state.get("repair_attempts", [])
     scored_repairs = tuple(_score_repair_attempt(a, cumulative_outcomes) for a in repair_attempts)
 
-    return RepoScore(
+    return RepoResult(
         repo_id=repo.repo_id,
-        use_triage=use_triage,
+        config=config,
         pass_rate=pass_rate,
         full_green=pass_rate >= 1.0,
         iterations=budget.iterations,

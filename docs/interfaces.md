@@ -429,20 +429,20 @@ class RepoResult:
 The harness is resumable (skip completed `(repo, config)` cells), parallel over Docker,
 and writes `docs/results/<config>.md` plus a combined `main.md`.
 
-**Implementation update (docs/decisions.md D40):** a minimal slice of this exists early,
-pulled forward into Phase 4 because phase-4-triage.md's own acceptance criteria
-(classifier accuracy, measured pass-rate lift, per-repo cost, per-class fix-rate table)
-can't be satisfied without SOME way to run the loop across corpus repos and score it.
-Not the full sketch above: `eval/metrics.py` has `RepoScore` (a strict subset of
-`RepoResult` — `repo_id`, `pass_rate`, `full_green`, `iterations`, `usd_spent`,
-`wallclock_s`, `final_diagnosis_counts`; no `diff_line_jaccard`, `symbol_precision/recall`,
-or `trace_path` yet) and `score_run()`, the one place this scoring happens. `eval/
-harness.py` has `run_repo()`/`run_corpus()`/`checkout_pre_sha()` — no `EvalConfig`, no
-`retrieval`/`tiers`/`seed` axes, no resumability, no parallelism. The one ablation axis
-that exists is `build_migration_graph(..., use_triage: bool)` — `EvalConfig.triage`'s
-exact early form — because that's the one axis Phase 4 itself needs measured; `retrieval`
-and `tiers` stay unbuilt until Phase 5 has real evidence to design them against, same
-reasoning as `triage/rules.py`'s "only classes with real evidence get a rule" stance.
-`run_repo` also writes real failure text + predicted class to a JSONL side-channel — the
-seed data phase-4-triage.md's "≥100 hand-labelled failures" needs, previously blocked on
-having nowhere to get real failures from at all.
+**Implementation update (docs/decisions.md D40, superseded by D57):** D40 pulled a minimal
+slice forward into Phase 4 (`RepoScore`, a strict subset of `RepoResult` with a bare
+`use_triage: bool` instead of `EvalConfig`), because phase-4-triage.md's own acceptance
+criteria couldn't be satisfied without SOME way to run the loop across corpus repos and
+score it. D57 (Phase 5's first real step) closed most of that gap: `eval/config.py` now
+has the real `EvalConfig` above — full field set, but `retrieval != "graph"` or
+`tiers != {T1,T2,T3}` raise `NotImplementedError` rather than silently running the wrong
+thing, since those axes have no real implementation to back them yet. `eval/metrics.py`'s
+`RepoScore` is renamed `RepoResult` and carries `config: EvalConfig` plus
+`diff_line_jaccard`/`symbol_precision`/`symbol_recall`/`trace_path` as `| None` fields
+(populated by later Phase 5 steps, not yet). `eval/harness.py`'s `run_repo()`/
+`run_corpus()` take `config: EvalConfig` instead of `use_triage: bool`. Still missing from
+the full sketch: resumability, parallelism, the SQLite result store, and the run manifest
+— later Phase 5 steps, built once retrieval/tiers/diff-similarity have real shapes to
+resume/score. `run_repo` also writes real failure text + predicted class to a JSONL
+side-channel — the seed data phase-4-triage.md's "≥100 hand-labelled failures" needed,
+now hand-labelled and closed out (D55/D56).

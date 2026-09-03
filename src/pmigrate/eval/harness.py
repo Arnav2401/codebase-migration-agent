@@ -1,8 +1,13 @@
-"""Phase 4's minimal eval harness (docs/decisions.md D40) — runs the migration loop
-across corpus repos and scores each one via `eval/metrics.py`. Deliberately NOT Phase
-5's full `EvalConfig`/ablation-arm harness (interfaces.md §8: retrieval strategy, tiers,
-seed, resumable parallel Docker runs) — this hard-codes one axis (`use_triage`) because
-that's the one axis phase-4-triage.md's own acceptance criteria need measured.
+"""Phase 5's eval harness (docs/decisions.md D40/D57) — runs the migration loop across
+corpus repos and scores each one via `eval/metrics.py`. Still NOT the full resumable,
+parallel, SQLite-backed harness interfaces.md §8/phase-5-eval.md describe — that's a
+later Phase 5 step, built once `EvalConfig`/`RepoResult` (this step) have real callers.
+`run_repo`/`run_corpus` now take a full `EvalConfig` rather than a bare `use_triage: bool`,
+but only `config.triage` (threaded to `build_migration_graph`) and
+`config.usd_cap_per_repo` (the default `BudgetState.usd_cap` when the caller doesn't pass
+one explicitly) actually affect behavior yet — `config.model`/`config.seed` are carried as
+provenance on the resulting `RepoResult`, not yet consumed to construct anything, since the
+caller already passes a live `model_client` object directly.
 
 Split for testability (CLAUDE.md: no network in unit tests): `run_repo` takes an
 ALREADY-checked-out `source_root` and a pre-built `image`, so it can be exercised with
@@ -28,7 +33,8 @@ from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.graph import build_migration_graph
 from pmigrate.agent.model_client import ModelClient
 from pmigrate.agent.state import AgentState
-from pmigrate.eval.metrics import RepoScore, score_run
+from pmigrate.eval.config import EvalConfig
+from pmigrate.eval.metrics import RepoResult, score_run
 from pmigrate.graph.relevance import compute_work_list
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.graph.resolver import resolve_repo
@@ -102,11 +108,11 @@ def run_repo(
     overlay_root: Path,
     sandbox: Sandbox,
     model_client: ModelClient | None,
-    use_triage: bool = True,
+    config: EvalConfig,
     policy: SandboxPolicy | None = None,
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
-) -> RepoScore:
+) -> RepoResult:
     """Runs the full migration loop against one already-checked-out repo and scores the
     result. `image` is built by the caller (`sandbox.build(repo, "v2")` — the SAME image
     is reused for every `run_tests` call across the whole loop, so it must already have
@@ -118,8 +124,9 @@ def run_repo(
     import, breaking collection for every module that touched the rewritten file).
     Cached by `sandbox/image.py`'s deps-hash rather than built here, matching
     `build_migration_graph`'s own build-vs-run split. `budget` defaults to
-    `BudgetState()`'s own defaults ($5 usd_cap, 20 max_iterations) if not given — a live
-    corpus run should usually pass a tighter cap explicitly."""
+    `BudgetState(usd_cap=config.usd_cap_per_repo)` if not given — pass one explicitly for
+    anything besides `config`'s own cap (e.g. a tighter `max_iterations` or
+    `wallclock_cap_s` for a specific run)."""
     if repo.baseline is None:
         raise ValueError(f"{repo.repo_id} has no captured baseline (I4) — run capture-baselines")
 
@@ -133,18 +140,22 @@ def run_repo(
         overlay_root=overlay_root,
         policy=policy or SandboxPolicy(),
         model_client=model_client,
-        use_triage=use_triage,
+        use_triage=config.triage,
     )
 
     start = time.time()
-    state = AgentState(repo=repo, work_list=work_list, budget=budget or BudgetState())
+    state = AgentState(
+        repo=repo,
+        work_list=work_list,
+        budget=budget or BudgetState(usd_cap=config.usd_cap_per_repo),
+    )
     final_state = graph.invoke(state)
     wallclock_s = time.time() - start
 
     if failures_out is not None:
         _dump_residual_failures(repo, final_state, failures_out)
 
-    return score_run(repo, final_state, wallclock_s, use_triage=use_triage)
+    return score_run(repo, final_state, wallclock_s, config=config)
 
 
 def run_corpus(
@@ -153,16 +164,16 @@ def run_corpus(
     work_root: Path,
     sandbox: Sandbox,
     model_client: ModelClient | None,
+    config: EvalConfig,
     split: Literal["dev", "test"] | None = "dev",
-    use_triage: bool = True,
     policy: SandboxPolicy | None = None,
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
-) -> list[RepoScore]:
+) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
     stance on a single bad repo."""
-    scores = []
+    results = []
     for repo in specs:
         if repo.baseline is None:
             log.info("harness.skip_no_baseline", repo_id=repo.repo_id)
@@ -191,14 +202,14 @@ def run_corpus(
             # repo in the loop would make wallclock_cap_s count from the FIRST repo's
             # start, not each repo's own, and falsely trip on a later repo in a long run.
             repo_budget = replace(budget, started_at=time.time()) if budget else None
-            score = run_repo(
+            result = run_repo(
                 repo,
                 image=image,
                 source_root=source_root,
                 overlay_root=overlay_root,
                 sandbox=sandbox,
                 model_client=model_client,
-                use_triage=use_triage,
+                config=config,
                 policy=policy,
                 budget=repo_budget,
                 failures_out=failures_out,
@@ -207,14 +218,15 @@ def run_corpus(
             log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
             continue
 
-        scores.append(score)
+        results.append(result)
         log.info(
             "harness.repo_scored",
             repo_id=repo.repo_id,
-            use_triage=use_triage,
-            pass_rate=score.pass_rate,
-            full_green=score.full_green,
-            usd_spent=score.usd_spent,
+            config=config.name,
+            triage=config.triage,
+            pass_rate=result.pass_rate,
+            full_green=result.full_green,
+            usd_spent=result.usd_spent,
         )
 
-    return scores
+    return results

@@ -50,12 +50,32 @@ classifier accuracy on it is a free extra metric.
 
 ## Acceptance criteria
 
-- [ ] Classifier accuracy ≥85% on a hand-labelled set of ≥100 real failures from Phase 3 runs
-- [ ] Failures grouped by root cause — measured as average failures-per-diagnosis > 1
-- [ ] **Measured pass-rate lift vs. Phase 3 on the dev split, same model, same seed.**
+- [x] Classifier accuracy ≥85% on a hand-labelled set of ≥100 real failures from Phase 3 runs
+      — **96.8%** (398/411, `tests/fixtures/triage/labelled_dev.jsonl`), continuously
+      checked by `tests/eval/test_classifier_regression.py`. Full trace, including the
+      raw-72.5%-to-96.8% path and two accepted residual gaps: docs/decisions.md D55/D56.
+- [x] Failures grouped by root cause — measured as average failures-per-diagnosis > 1
+      — confirmed (~14-15 average across both `use_triage` arms on the Gemini run).
+      docs/results/triage.md, docs/decisions.md D51.
+- [x] **Measured pass-rate lift vs. Phase 3 on the dev split, same model, same seed.**
       This is the phase's whole justification. If the lift is small, say so honestly and
       investigate why — that's a better interview story than a fabricated win.
-- [ ] Median cost per repo drops (fewer tokens, targeted context)
-- [ ] Per-class fix-success table generated into `docs/results/triage.md`
+      — 0.6672 (ON) vs 0.5771 (OFF) on the 6 same-model-comparable repos (Groq,
+      `openai/gpt-oss-120b`), docs/results/triage.md's headline table. Not a large lift on
+      every repo — read the per-repo breakdown, not just the average.
+- [x] Median cost per repo drops (fewer tokens, targeted context)
+      — $0.0016 (ON) vs $0.0022 (OFF) median usd/repo. Reported alongside the mean, which
+      moves the other way (driven by one hard-case repo's real repair attempts) — see
+      docs/results/triage.md's "Median cost per repo drops — but the mean doesn't" section
+      for why both numbers matter here.
+- [x] Per-class fix-success table generated into `docs/results/triage.md`
+      — real, automated (`eval/metrics.py`'s `fix_success_table`, D51/D52), not hand
+      reconstructed. `unknown` class: 55% fix rate on 14 real attempts.
 
 That last table is the single most valuable artefact in the project for interviews.
+
+**Known gaps carried forward, not blocking the phase:** a same-model `use_triage=True` vs
+`False` fix-success-table comparison (Gemini's OFF arm hit its daily quota wall before any
+real attempt; Groq's own equivalent needs a clean run once its quota resets); two
+documented, deliberately-unfixed classifier gaps (D56) that would need genuinely new
+evidence, not overfit regexes, to close.

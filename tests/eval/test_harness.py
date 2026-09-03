@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
+from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.harness import run_repo
 from pmigrate.types import (
     BaselineResult,
@@ -12,6 +13,10 @@ from pmigrate.types import (
     TestOutcome,
     TestRun,
 )
+
+
+def _config(triage: bool = True) -> EvalConfig:
+    return EvalConfig(name="test", model="fake", triage=triage)
 
 
 @dataclass
@@ -91,6 +96,7 @@ def test_run_repo_raises_without_a_captured_baseline(tmp_path: Path) -> None:
             overlay_root=overlay_root,
             sandbox=sandbox,
             model_client=None,
+            config=_config(),
         )
         raise AssertionError("expected ValueError")
     except ValueError as e:
@@ -102,20 +108,21 @@ def test_run_repo_scores_a_t1_only_full_green_run(tmp_path: Path) -> None:
     repo = _repo(_baseline(frozenset({"t.py::test_a"})))
     sandbox = FakeSandbox(responses=[_passed_run()])
 
-    score = run_repo(
+    result = run_repo(
         repo,
         image=sandbox.build(repo, "v1"),
         source_root=source_root,
         overlay_root=overlay_root,
         sandbox=sandbox,
         model_client=None,
+        config=_config(),
         policy=SandboxPolicy(),
     )
 
-    assert score.repo_id == "acme__widgets"
-    assert score.pass_rate == 1.0
-    assert score.full_green is True
-    assert score.use_triage is True
+    assert result.repo_id == "acme__widgets"
+    assert result.pass_rate == 1.0
+    assert result.full_green is True
+    assert result.config.triage is True
 
 
 def test_run_repo_dumps_residual_failures_with_full_text_and_predicted_class(
@@ -145,6 +152,7 @@ def test_run_repo_dumps_residual_failures_with_full_text_and_predicted_class(
         overlay_root=overlay_root,
         sandbox=sandbox,
         model_client=None,  # T1-only: no repair, finalizes after one red run
+        config=_config(),
         failures_out=failures_out,
     )
 
@@ -188,16 +196,16 @@ def test_run_repo_routes_repair_through_diagnosis_when_use_triage_is_true(
         ]
     )
 
-    score = run_repo(
+    result = run_repo(
         repo,
         image=sandbox.build(repo, "v1"),
         source_root=source_root,
         overlay_root=overlay_root,
         sandbox=sandbox,
         model_client=fake_model,
-        use_triage=True,
+        config=_config(triage=True),
     )
 
     assert len(fake_model.calls) == 1
-    assert score.usd_spent == 0.02
-    assert score.full_green is True
+    assert result.usd_spent == 0.02
+    assert result.full_green is True

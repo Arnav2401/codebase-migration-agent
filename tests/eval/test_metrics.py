@@ -4,6 +4,7 @@ import pytest
 
 from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.state import RepairAttempt
+from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.metrics import (
     ScoredRepairAttempt,
     classifier_accuracy,
@@ -19,6 +20,10 @@ from pmigrate.types import (
     TestOutcome,
     TestRun,
 )
+
+
+def _config(triage: bool = True) -> EvalConfig:
+    return EvalConfig(name="test", model="fake", triage=triage)
 
 
 def _repo(baseline: BaselineResult | None) -> RepoSpec:
@@ -47,7 +52,7 @@ def _outcome(node_id: str, status: Literal["passed", "failed"]) -> TestOutcome:
 def test_raises_without_a_captured_baseline() -> None:
     repo = _repo(baseline=None)
     with pytest.raises(ValueError, match="no captured baseline"):
-        score_run(repo, {"cumulative_outcomes": {}, "budget": BudgetState()}, 1.0, use_triage=True)
+        score_run(repo, {"cumulative_outcomes": {}, "budget": BudgetState()}, 1.0, config=_config())
 
 
 def test_full_green_when_every_baseline_passing_test_still_passes() -> None:
@@ -60,14 +65,14 @@ def test_full_green_when_every_baseline_passing_test_still_passes() -> None:
         "budget": BudgetState(iterations=2, usd_spent=0.5),
         "diagnoses": [],
     }
-    score = score_run(repo, final_state, 12.5, use_triage=True)
+    result = score_run(repo, final_state, 12.5, config=_config())
 
-    assert score.pass_rate == 1.0
-    assert score.full_green is True
-    assert score.iterations == 2
-    assert score.usd_spent == 0.5
-    assert score.wallclock_s == 12.5
-    assert score.use_triage is True
+    assert result.pass_rate == 1.0
+    assert result.full_green is True
+    assert result.iterations == 2
+    assert result.usd_spent == 0.5
+    assert result.wallclock_s == 12.5
+    assert result.config.triage is True
 
 
 def test_partial_pass_rate_when_some_baseline_passing_tests_still_fail() -> None:
@@ -80,9 +85,9 @@ def test_partial_pass_rate_when_some_baseline_passing_tests_still_fail() -> None
         "budget": BudgetState(),
         "diagnoses": [],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.pass_rate == 0.5
-    assert score.full_green is False
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.pass_rate == 0.5
+    assert result.full_green is False
 
 
 def test_carries_forward_a_test_not_covered_by_the_final_narrow_run() -> None:
@@ -103,21 +108,21 @@ def test_carries_forward_a_test_not_covered_by_the_final_narrow_run() -> None:
         "budget": BudgetState(),
         "diagnoses": [],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.pass_rate == pytest.approx(2 / 3)
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.pass_rate == pytest.approx(2 / 3)
 
 
 def test_empty_cumulative_outcomes_scores_as_zero_pass_rate() -> None:
     # a repo that crashed before ever running tests -- shouldn't raise, should score honestly
     repo = _repo(_baseline(frozenset({"t.py::a"})))
-    score = score_run(
+    result = score_run(
         repo,
         {"cumulative_outcomes": {}, "budget": BudgetState(), "diagnoses": []},
         1.0,
-        use_triage=False,
+        config=_config(triage=False),
     )
-    assert score.pass_rate == 0.0
-    assert score.full_green is False
+    assert result.pass_rate == 0.0
+    assert result.full_green is False
 
 
 def _run(outcomes: tuple[TestOutcome, ...]) -> TestRun:
@@ -129,13 +134,13 @@ def _run(outcomes: tuple[TestOutcome, ...]) -> TestRun:
 def test_avg_failures_per_diagnosis_defaults_to_zero_without_a_last_run() -> None:
     # no last_run key at all -- e.g. a repo that crashed before its first test run.
     repo = _repo(_baseline(frozenset({"t.py::a"})))
-    score = score_run(
+    result = score_run(
         repo,
         {"cumulative_outcomes": {}, "budget": BudgetState(), "diagnoses": []},
         1.0,
-        use_triage=True,
+        config=_config(),
     )
-    assert score.avg_failures_per_diagnosis == 0.0
+    assert result.avg_failures_per_diagnosis == 0.0
 
 
 def test_avg_failures_per_diagnosis_is_zero_when_last_run_has_nothing_to_group() -> None:
@@ -148,8 +153,8 @@ def test_avg_failures_per_diagnosis_is_zero_when_last_run_has_nothing_to_group()
         "diagnoses": [],
         "last_run": _run((_outcome("t.py::a", "passed"),)),
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.avg_failures_per_diagnosis == 0.0
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.avg_failures_per_diagnosis == 0.0
 
 
 def test_avg_failures_per_diagnosis_is_one_when_every_failure_stays_isolated() -> None:
@@ -168,8 +173,8 @@ def test_avg_failures_per_diagnosis_is_one_when_every_failure_stays_isolated() -
         "diagnoses": [],
         "last_run": _run(outcomes),
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.avg_failures_per_diagnosis == 1.0
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.avg_failures_per_diagnosis == 1.0
 
 
 def test_avg_failures_per_diagnosis_reflects_real_grouping() -> None:
@@ -192,8 +197,8 @@ def test_avg_failures_per_diagnosis_reflects_real_grouping() -> None:
         "diagnoses": [],
         "last_run": _run(outcomes),
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.avg_failures_per_diagnosis == 2.0
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.avg_failures_per_diagnosis == 2.0
 
 
 def test_final_diagnosis_counts_reflect_state_diagnoses() -> None:
@@ -216,13 +221,13 @@ def test_final_diagnosis_counts_reflect_state_diagnoses() -> None:
             strategy="fix_import",
         ),
     ]
-    score = score_run(
+    result = score_run(
         repo,
         {"cumulative_outcomes": {}, "budget": BudgetState(), "diagnoses": diagnoses},
         1.0,
-        use_triage=True,
+        config=_config(),
     )
-    assert score.final_diagnosis_counts[FailureClass.IMPORT_ERROR] == 2
+    assert result.final_diagnosis_counts[FailureClass.IMPORT_ERROR] == 2
 
 
 def _attempt(
@@ -251,8 +256,8 @@ def test_scored_repairs_marks_an_applied_attempt_fixed_when_all_its_node_ids_pas
         "diagnoses": [],
         "repair_attempts": [_attempt("applied", node_ids=("t.py::a", "t.py::b"))],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.scored_repairs == (
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.scored_repairs == (
         ScoredRepairAttempt(attempt=final_state["repair_attempts"][0], fixed=True),
     )
 
@@ -268,8 +273,8 @@ def test_scored_repairs_marks_an_applied_attempt_not_fixed_when_one_node_id_stil
         "diagnoses": [],
         "repair_attempts": [_attempt("applied", node_ids=("t.py::a", "t.py::b"))],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.scored_repairs[0].fixed is False
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.scored_repairs[0].fixed is False
 
 
 def test_scored_repairs_never_credits_a_non_applied_outcome_even_if_node_ids_pass() -> None:
@@ -288,8 +293,8 @@ def test_scored_repairs_never_credits_a_non_applied_outcome_even_if_node_ids_pas
             _attempt("model_error", node_ids=("t.py::a",)),
         ],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert all(scored.fixed is False for scored in score.scored_repairs)
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert all(scored.fixed is False for scored in result.scored_repairs)
 
 
 def test_scored_repairs_empty_node_ids_is_never_fixed() -> None:
@@ -302,15 +307,15 @@ def test_scored_repairs_empty_node_ids_is_never_fixed() -> None:
         "diagnoses": [],
         "repair_attempts": [_attempt("applied", node_ids=())],
     }
-    score = score_run(repo, final_state, 1.0, use_triage=True)
-    assert score.scored_repairs[0].fixed is False
+    result = score_run(repo, final_state, 1.0, config=_config())
+    assert result.scored_repairs[0].fixed is False
 
 
 def test_fix_success_table_aggregates_across_repos_by_class() -> None:
     repo = _repo(_baseline(frozenset()))
     fixed_attempt = _attempt("applied", node_ids=("t.py::a",), cls=FailureClass.CLASS_DEF_ERROR)
     not_fixed_attempt = _attempt("applied", node_ids=("t.py::b",), cls=FailureClass.CLASS_DEF_ERROR)
-    score_a = score_run(
+    result_a = score_run(
         repo,
         {
             "cumulative_outcomes": {"t.py::a": _outcome("t.py::a", "passed")},
@@ -319,9 +324,9 @@ def test_fix_success_table_aggregates_across_repos_by_class() -> None:
             "repair_attempts": [fixed_attempt],
         },
         1.0,
-        use_triage=True,
+        config=_config(),
     )
-    score_b = score_run(
+    result_b = score_run(
         repo,
         {
             "cumulative_outcomes": {"t.py::b": _outcome("t.py::b", "failed")},
@@ -330,9 +335,9 @@ def test_fix_success_table_aggregates_across_repos_by_class() -> None:
             "repair_attempts": [not_fixed_attempt],
         },
         1.0,
-        use_triage=True,
+        config=_config(),
     )
-    table = fix_success_table([score_a, score_b])
+    table = fix_success_table([result_a, result_b])
     row = table[FailureClass.CLASS_DEF_ERROR]
     assert (row.attempts, row.applied, row.fixed) == (2, 2, 1)
     assert row.fix_rate == pytest.approx(0.5)
@@ -340,7 +345,7 @@ def test_fix_success_table_aggregates_across_repos_by_class() -> None:
 
 def test_fix_success_table_groups_use_triage_false_attempts_under_none() -> None:
     repo = _repo(_baseline(frozenset()))
-    score = score_run(
+    result = score_run(
         repo,
         {
             "cumulative_outcomes": {"t.py::a": _outcome("t.py::a", "passed")},
@@ -349,16 +354,16 @@ def test_fix_success_table_groups_use_triage_false_attempts_under_none() -> None
             "repair_attempts": [_attempt("applied", node_ids=("t.py::a",), cls=None)],
         },
         1.0,
-        use_triage=False,
+        config=_config(triage=False),
     )
-    table = fix_success_table([score])
+    table = fix_success_table([result])
     assert None in table
     assert table[None].fixed == 1
 
 
 def test_fix_success_table_fix_rate_is_zero_when_nothing_applied() -> None:
     repo = _repo(_baseline(frozenset()))
-    score = score_run(
+    result = score_run(
         repo,
         {
             "cumulative_outcomes": {},
@@ -367,9 +372,9 @@ def test_fix_success_table_fix_rate_is_zero_when_nothing_applied() -> None:
             "repair_attempts": [_attempt("no_target", node_ids=())],
         },
         1.0,
-        use_triage=True,
+        config=_config(),
     )
-    table = fix_success_table([score])
+    table = fix_success_table([result])
     row = table[FailureClass.IMPORT_ERROR]
     assert (row.attempts, row.applied, row.fixed) == (1, 0, 0)
     assert row.fix_rate == 0.0
