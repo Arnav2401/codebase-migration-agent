@@ -11,10 +11,13 @@ from typing import Literal
 
 from pmigrate.agent.budget import BudgetState
 from pmigrate.codemod.protocol import RuleEdit
-from pmigrate.types import Diagnosis, MigrationUnit, RepoSpec, TestOutcome, TestRun
+from pmigrate.types import Diagnosis, FailureClass, MigrationUnit, RepoSpec, TestOutcome, TestRun
 
 Status = Literal["running", "done", "budget_exceeded", "no_progress", "failed"]
 EditSource = Literal["T1", "T2", "T3"]
+# Mirrors repair()'s five real `agent.repair_*` log events exactly (agent/graph.py) --
+# no new vocabulary invented here, just persisting what was already being logged.
+RepairOutcome = Literal["no_target", "model_error", "no_edit", "applied", "rejected"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,23 @@ class Edit:
     files_changed: tuple[str, ...]
     diff: str
     rule_edits: tuple[RuleEdit, ...] = ()  # populated for T1; empty for T2/T3
+
+
+@dataclass(frozen=True)
+class RepairAttempt:
+    """One `repair()` call's outcome (docs/phase-4-triage.md's per-class fix-success
+    table needs this history; `AgentState` never retained it before -- docs/decisions.md
+    D40's "deliberately not in this pass" list). Deliberately does NOT record whether the
+    attempt actually fixed anything: that's only knowable once the run's FINAL
+    `cumulative_outcomes` exists, by joining `node_ids` against it -- eval/metrics.py's
+    job, not something to compute mid-loop."""
+
+    iteration: int
+    cls: FailureClass | None  # None for use_triage=False (no single chosen diagnosis)
+    strategy: str | None
+    node_ids: tuple[str, ...]  # what this attempt targeted -- () when no diagnosis was chosen
+    outcome: RepairOutcome
+    usd_cost: float
 
 
 @dataclass
@@ -44,6 +64,7 @@ class AgentState:
     # recently OBSERVED outcome, carried forward when a later run doesn't re-test it.
     cumulative_outcomes: dict[str, TestOutcome] = field(default_factory=dict)
     diagnoses: list[Diagnosis] = field(default_factory=list)
+    repair_attempts: list[RepairAttempt] = field(default_factory=list)
     iteration: int = 0
     budget: BudgetState = field(default_factory=BudgetState)
     trace_id: str = ""

@@ -33,7 +33,7 @@ from pmigrate.agent.repair import (
     find_related_files,
     repair_system_prompt,
 )
-from pmigrate.agent.state import AgentState, Edit
+from pmigrate.agent.state import AgentState, Edit, RepairAttempt, RepairOutcome
 from pmigrate.codemod.engine import apply_rules
 from pmigrate.codemod.rules import ALL_RULES
 from pmigrate.graph.repo_files import read_py_files
@@ -262,6 +262,32 @@ def build_migration_graph(
 
         chosen: GroupedDiagnosis | None = None
         target_path: str | None = None
+
+        def _record(outcome: RepairOutcome, *, usd_cost: float = 0.0) -> RepairAttempt:
+            # `chosen` is None both for use_triage=False (no single diagnosis -- the
+            # whole combined blob is the "target") and for use_triage=True's own
+            # no-target case (every repairable candidate lacked a findable file) --
+            # attributing all raw failures' node_ids to the attempt is honest in both:
+            # it names exactly what this attempt was unable to (or didn't need to)
+            # narrow down to one diagnosis.
+            if chosen is not None:
+                cls, strategy, node_ids = (
+                    chosen.diagnosis.cls,
+                    chosen.diagnosis.strategy,
+                    chosen.diagnosis.node_ids,
+                )
+            else:
+                cls, strategy = None, None
+                node_ids = tuple(f.node_id for f in raw_failures if f.node_id is not None)
+            return RepairAttempt(
+                iteration=state.budget.iterations + 1,  # matches run_tests_node's own numbering
+                cls=cls,
+                strategy=strategy,
+                node_ids=node_ids,
+                outcome=outcome,
+                usd_cost=usd_cost,
+            )
+
         if use_triage:
             grouped = group_raw_failures(raw_failures, state.repo.baseline)
             repairable = [
@@ -290,7 +316,8 @@ def build_migration_graph(
                 log.warning(
                     "agent.repair_no_target", trace_id=state.trace_id, repo_id=state.repo.repo_id
                 )
-                return {}  # no state change; no_progress eventually catches a real stall
+                # no edit/status change; no_progress eventually catches a real stall
+                return {"repair_attempts": [*state.repair_attempts, _record("no_target")]}
         else:
             # docs/decisions.md D40: the pre-D38 "Phase 3" shape — every raw failure
             # dumped into one prompt, no per-class targeting at all.
@@ -304,7 +331,8 @@ def build_migration_graph(
                 repo_id=state.repo.repo_id,
                 cls=chosen.diagnosis.cls.value if chosen else None,
             )
-            return {}  # no state change; no_progress eventually catches a real stall
+            # no edit/status change; no_progress eventually catches a real stall
+            return {"repair_attempts": [*state.repair_attempts, _record("no_target")]}
 
         target_before = (overlay_root / target_path).read_text()
         related_paths = find_related_files(target_path, target_before, overlay_root)
@@ -330,7 +358,10 @@ def build_migration_graph(
                 repo_id=state.repo.repo_id,
                 error=str(exc),
             )
-            return {"status": "failed"}
+            return {
+                "status": "failed",
+                "repair_attempts": [*state.repair_attempts, _record("model_error")],
+            }
 
         spend = state.budget.spend(response.usd_cost, response.tokens_in, response.tokens_out)
         rewritten = extract_rewritten_files(response.text)
@@ -344,7 +375,14 @@ def build_migration_graph(
                 cls=chosen.diagnosis.cls.value if chosen else None,
                 strategy=chosen.diagnosis.strategy if chosen else None,
             )
-            return {"budget": spend}  # spent money on the attempt even if it produced nothing
+            # spent money on the attempt even if it produced nothing
+            return {
+                "budget": spend,
+                "repair_attempts": [
+                    *state.repair_attempts,
+                    _record("no_edit", usd_cost=response.usd_cost),
+                ],
+            }
 
         new_edits = list(state.edits)
         for path, after in rewritten.items():
@@ -394,7 +432,19 @@ def build_migration_graph(
                 # silent-failure-path gap CLAUDE.md's review checklist calls out.
                 stderr=result.stderr if not result.applied else None,
             )
-        return {"edits": new_edits, "budget": spend}
+        # "applied" if ANY proposed file made it through apply_patch; "rejected" covers
+        # every other outcome for a call that DID produce a rewrite (unshown path,
+        # no-op, or an I1-I3/syntax violation) -- distinct from "no_edit" above, where
+        # the model returned nothing to rewrite at all.
+        outcome: RepairOutcome = "applied" if len(new_edits) > len(state.edits) else "rejected"
+        return {
+            "edits": new_edits,
+            "budget": spend,
+            "repair_attempts": [
+                *state.repair_attempts,
+                _record(outcome, usd_cost=response.usd_cost),
+            ],
+        }
 
     def run_tests_node(state: AgentState) -> dict[str, Any]:
         """docs/decisions.md D46: also updates `cumulative_outcomes` — the new run's

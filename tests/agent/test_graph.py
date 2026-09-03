@@ -247,6 +247,11 @@ def test_progress_between_repairs_does_not_trigger_no_progress(tmp_path: Path) -
 
     assert result["status"] == "done"
     assert len(sandbox.run_calls) == 3
+    # doubles as the accumulation check: two real repair() calls (one per failed run),
+    # both landing on "no_edit" since "attempt" has no "File:" marker to rewrite -- a
+    # node returning {"repair_attempts": [...]} must build the FULL new list itself
+    # (LangGraph replaces the key wholesale), the same pattern cumulative_outcomes uses.
+    assert [a.outcome for a in result["repair_attempts"]] == ["no_edit", "no_edit"]
 
 
 def test_early_unit_failure_does_not_block_later_units_t1_fixes(tmp_path: Path) -> None:
@@ -310,6 +315,8 @@ def test_model_client_failure_in_repair_ends_the_run_as_failed_not_a_crash(
     assert result["status"] == "failed"
     assert len(raising_client.calls) == 1
     assert len(sandbox.run_calls) == 1  # never looped back into a second test run
+    assert [a.outcome for a in result["repair_attempts"]] == ["model_error"]
+    assert result["repair_attempts"][0].usd_cost == 0.0  # complete() raised before returning a cost
 
 
 def test_t1_fixes_files_outside_the_work_list(tmp_path: Path) -> None:
@@ -380,6 +387,77 @@ def test_repair_applies_a_multi_file_response_end_to_end(tmp_path: Path) -> None
     # the unchanged file must NOT show up as a spurious edit
     assert not any(e.unit_module == "app.app_settings" for e in result["edits"])
     assert any(e.unit_module == "app.base" and e.source == "T2" for e in result["edits"])
+    assert [a.outcome for a in result["repair_attempts"]] == ["applied"]
+    assert result["repair_attempts"][0].usd_cost == 0.01
+
+
+def test_repair_records_a_rejected_attempt_when_nothing_the_model_proposes_lands(
+    tmp_path: Path,
+) -> None:
+    # the model responds, but every proposed file either names a path never shown to it
+    # (agent.repair_unknown_path -- the same I1-I3 guard that discarded a hallucinated
+    # path live on cmudig__draco2, docs/results/triage.md) or is a no-op -- distinct from
+    # "no_edit" above, where the model returns nothing to rewrite at all.
+    source_root, overlay_root = _setup_source(tmp_path, content="x = 1\n")  # T1 can't fix this
+    sandbox = FakeSandbox(responses=[_failed_run(), _failed_run()])
+    fake_model = FakeModelClient(
+        responses=[
+            ModelResponse(
+                text="File: app/never_shown.py\n```python\nx = 2\n```\n",
+                usd_cost=0.01,
+                tokens_in=10,
+                tokens_out=10,
+            )
+        ]
+    )
+    graph = build_migration_graph(
+        sandbox=sandbox,
+        image=_image(),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        policy=SandboxPolicy(),
+        model_client=fake_model,
+    )
+    state = AgentState(repo=_repo(), work_list=[[_unit()]])
+
+    result = graph.invoke(state)
+
+    assert [a.outcome for a in result["repair_attempts"]] == ["rejected"]
+    assert result["repair_attempts"][0].usd_cost == 0.01
+
+
+def test_repair_records_a_no_target_attempt_when_no_candidate_has_a_findable_target(
+    tmp_path: Path,
+) -> None:
+    # the ONLY failure's ONLY first-party-ish frame is a test file itself --
+    # extract_target_file correctly refuses to point at it (I1), and with no other
+    # candidate to fall through to (docs/decisions.md D50), chosen stays None entirely.
+    source_root, overlay_root = _setup_source(tmp_path, content="x = 1\n")
+    traceback = (
+        "tests/test_control.py:25: in <module>\n"
+        "    class Dummy(config: pydantic.BaseSettings=None):\n"
+        "E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved"
+    )
+    sandbox = FakeSandbox(responses=[_failed_run(traceback=traceback)])
+    fake_model = FakeModelClient(responses=[])  # never called -- no target, no model call
+    graph = build_migration_graph(
+        sandbox=sandbox,
+        image=_image(),
+        source_root=source_root,
+        overlay_root=overlay_root,
+        policy=SandboxPolicy(),
+        model_client=fake_model,
+    )
+    state = AgentState(repo=_repo(), work_list=[[_unit()]])
+
+    result = graph.invoke(state)
+
+    assert fake_model.calls == []
+    assert [a.outcome for a in result["repair_attempts"]] == ["no_target"]
+    assert result["repair_attempts"][0].cls is None
+    # no diagnosis was ever chosen, but the raw failures it couldn't find a target for
+    # are still attributed to the attempt -- honest about what was tried and missed.
+    assert result["repair_attempts"][0].node_ids == ("t.py::test_a",)
 
 
 def _grouped(cls: FailureClass, node_id: str = "t.py::test_a") -> GroupedDiagnosis:

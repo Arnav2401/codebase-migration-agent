@@ -2109,6 +2109,45 @@ already correct; it's the walk between them that was missing."
 
 ---
 
+## D51 — `AgentState.repair_attempts`: per-call repair history, join fix-success later
+
+**Alternatives:** compute per-class fix-success inline inside `repair()`, right after
+`apply_patch` returns; widen `Classifier.classify()`'s return type from `list[Diagnosis]`
+to something that also carries success info.
+
+**Why:** docs/phase-4-triage.md's most valuable acceptance criterion — a per-class
+fix-success table — needs to know, for every repair attempt across a whole run, which
+`FailureClass` it targeted and what happened. Nothing on `AgentState` retained that; only
+the LAST `classify_node` call's diagnoses survived (`final_diagnosis_counts`'s own
+documented limit). Computing "was it fixed" inline was rejected because that's not
+knowable at repair-time — a repair's own node_ids might not be re-tested until several
+iterations later (`run_tests_node`'s selection-narrowing, D46), or another repair entirely
+might touch the same file first. Widening `Classifier.classify()`'s return type was
+rejected because `classify_and_group`'s existing narrowing to `list[Diagnosis]` (D38) is
+exactly what keeps the `Classifier` protocol simple for `route()`/`repair()`/every existing
+test — this is a scoring concern, not a classification-contract concern, and CLAUDE.md's
+"never compute a metric in more than one place" rule says that belongs in
+`eval/metrics.py`, not in the protocol every caller depends on.
+
+**Fixed by** adding `RepairAttempt` (iteration, `cls | None`, `strategy | None`, node_ids,
+one of five outcomes mirroring `repair()`'s existing `agent.repair_*` log events exactly —
+`no_target`/`model_error`/`no_edit`/`applied`/`rejected` — and `usd_cost`) and an additive
+`AgentState.repair_attempts: list[RepairAttempt]` field, appended to at every real exit
+point in `repair()` (the two earliest returns — no model client wired, nothing failing at
+all — don't count; nothing was attempted). Deliberately does NOT record success/failure
+itself: that's a later join against the run's FINAL `cumulative_outcomes` by `node_ids`,
+which is `eval/metrics.py`'s job once this data exists to join against.
+
+**Interview:** "The fix-success table needed history the state didn't keep — but I didn't
+want to guess at 'success' inside the loop, because a repair's effect isn't observable
+until a later test run confirms it, sometimes several iterations later. So this step only
+answers 'what was tried and what happened structurally' — five outcomes that already
+existed as log lines, just persisted instead of only printed. Whether it actually fixed
+anything is a pure function of that history plus the final test state, computed once, in
+the one place scoring is allowed to happen."
+
+---
+
 ## Template
 
 ```
