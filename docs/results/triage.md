@@ -110,17 +110,35 @@ failure mode shouldn't recur in future runs, but it was still real and unresolve
 treat `okfn__opendataeditor`'s OFF-arm score as unmeasured for this writeup; a rerun after
 D53 would be expected to complete normally.
 
-## Preliminary per-class attempt tally (`use_triage=True` arm, all 7 repos)
+## Per-class fix-success table (D51/D52's real join, not a hand reconstruction)
 
-Same caveat as before: this is a hand-reconstruction from structlog events with a small
-sample size — read it as "what happened in these attempts," not a rate.
+**This table is from a DIFFERENT run than the headline comparison above** — a full
+7-repo `use_triage=True` pass against `GeminiModelClient` (`gemini-3.6-flash`), run to
+validate D54's Gemini retry fix, not the Groq run the rest of this doc covers. Called out
+explicitly so the two aren't mistaken for the same experiment: `docs/phase-4-triage.md`'s
+"same model, same seed" requirement means this table cannot be paired with the Groq-backed
+OFF-arm numbers above for an ON-vs-OFF claim — Gemini's own OFF arm hit a hard quota wall
+immediately on every repo (0 real attempts, all `429`), so there is no same-model OFF data
+to compare against yet. What this table DOES give, for the first time: `eval/metrics.py`'s
+`fix_success_table` (D52) computed automatically from real `AgentState.repair_attempts`
+history (D51), not reconstructed by hand from log lines.
 
-| Class | Attempts | Outcome |
-|---|---|---|
-| `unknown` | 10 | 1 fixed (`kor`'s `parser.py`, +40 tests passing); 7 not fixed (`pydantic-argparse`'s hard case); 1 applied with inconclusive effect (`rohmu`'s `statsd.py`, next repair attempt hit `413` before an isolated re-test could attribute a delta); 1 failed outright (`opendataeditor`, `413` before a class could even be pinned down) |
-| `class_def_error` | 2 | 1 fixed (`rohmu`, 0/195 → 170/195 in one call); 1 discarded (`draco2` — model named a file never shown to it, rejected by the I1-I3 guard, not a fix) |
-| `validation_behaviour` | 2 | 1 fixed (`madkote`'s `logger.py`, the D50-verified repair); 1 applied with inconclusive effect (`rohmu`'s `config.py`, second pass — narrow re-test didn't cover a node_id this specific edit could have changed) |
-| `import_error` | 1 | Not fixed (`pydantic-argparse`) |
+| Class | Attempts | Applied | Fixed | Fix rate |
+|---|---|---|---|---|
+| `unknown` | 14 | 11 | 6 | **0.55** |
+| `class_def_error` | 2 | 2 | 0 | 0.00 |
+| `validation_behaviour` | 1 | 1 | 0 | 0.00 |
+
+`unknown`'s 0.55 fix rate is the first per-class number in this project with a sample
+size (14 attempts) large enough to mean anything at all. The two 0.00 rows are NOT
+evidence those strategies don't work — they're D52's own stated limitation showing up
+for real: `rohmu`'s `class_def_error` repair visibly took it from 0/195 to 173/195 passing
+in this same run (confirmed in the raw log), but that diagnosis originated from a
+collection error, which has no individual test node_id to check — `fixed` requires
+`node_ids` to be non-empty by construction (docs/decisions.md D52), so a collection-error
+diagnosis can never register as "fixed" even when it obviously worked. Read `applied=2,
+fixed=0` here as "this class isn't currently measurable by this join," not "this class
+fails."
 
 ## What's NOT here yet
 
@@ -133,11 +151,16 @@ sample size — read it as "what happened in these attempts," not a rate.
   has real residual failures with predicted classes and full traceback text, but nothing
   has been hand-labelled against it yet, and it's overwritten each run rather than
   accumulated.
-- **A full, statistically meaningful per-class fix-success table.** Needs both a bigger
-  corpus (7 repos still gives too few samples per class) and the `AgentState`
-  repair-attempt-history extension flagged in D40 — right now this is reconstructed by
-  hand from structlog events, which doesn't scale and can't attribute inconclusive cases
-  cleanly (see `rohmu`'s two entries above).
+- **A same-model fix-success table.** The real, automated table above (D51/D52) exists
+  now, but only for a `use_triage=True`-only Gemini run — Groq's own equivalent needs a
+  clean run once its daily token quota resets, and Gemini's own OFF arm needs its quota
+  to reset too before a same-model ON/OFF fix-success comparison is possible.
+- **A fix-success join that handles collection-error diagnoses.** `class_def_error` and
+  any other diagnosis whose only frame is a collection error has `node_ids=()` and can
+  never register as "fixed" by the current join, even when the repair visibly worked (see
+  `rohmu` above). Worth extending — e.g. falling back to "did overall pass count increase"
+  for empty-node_ids attempts — once there's a concrete case where it matters for a
+  real conclusion, not preemptively.
 - **Multiple seeds/reruns for variance.** One run per arm. `rohmu`'s ON/OFF gap moved
   slightly between this run and the previous one (0.87/0.86 → 0.89/0.86) purely from which
   iteration happened to hit the `413` limit — a reminder that single-run deltas on this
@@ -156,3 +179,9 @@ sample size — read it as "what happened in these attempts," not a rate.
   once at full completion, which didn't happen because the `opendataeditor` OFF cell was
   killed mid-run).
 - Residual failures with full text: `docs/results/triage_failures_dev.jsonl`
+- Gemini fix-success-table run (scratch, not committed): `corpus_run_gemini_results.json`
+  via `scratchpad/run_corpus_gemini.py` — the same run also confirmed D48's original
+  Gemini free-tier finding live a second time: `use_triage=True` got 6 of 7 repos through
+  with real repair attempts (~15-18 real model calls) before hitting a hard `429` on the
+  7th, after which every remaining repo/arm cell failed immediately with zero spend —
+  consistent with the ~20-requests/day cap D48 first observed.
