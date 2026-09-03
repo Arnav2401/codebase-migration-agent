@@ -2402,6 +2402,65 @@ behavior change."
 
 ---
 
+## D58 — Diff-similarity metrics take text, not diffs; reuse the Phase 1 parser directly
+
+**Alternatives:** take unified-diff strings as input (matching phase-5-eval.md's casual
+"map both diffs to changed symbols" wording) and parse them via `agent/diff.py`'s existing
+`parse_unified_diff`; build a second, separate symbol-extraction path scoped to this
+metric instead of reusing `graph/parser.py`'s `parse_file`.
+
+**Why:** symbol-level attribution needs to parse real file content through the Phase 1
+tree-sitter parser — a diff string alone can't be fed to a parser. `agent/diff.py`'s
+`parse_unified_diff` was ruled out for a more specific reason than "wrong shape": it
+discards line numbers entirely (its own hunk-header handling just skips `@@` lines), and
+it exists for a different purpose (reading back an LLM's proposed rewrite in
+`agent/graph.py`'s `repair()`), not diff analysis. Since `RepoSpec.pre_sha`/`post_sha` and
+the sandbox overlay are already full file content, not diff blobs, taking `before`/`after`
+text directly avoids inventing diff-string plumbing (with its own line-number-tracking
+gap to fix) just to immediately convert back to text. A second symbol-extraction path was
+rejected outright: `graph/parser.py`'s `parse_file` already does exactly this via
+tree-sitter, and duplicating it would violate CLAUDE.md's "never compute a metric in more
+than one place" in spirit even though this is infrastructure reuse, not a formula.
+
+**Design decisions worth naming explicitly, each stated in the module's own docstrings
+rather than left implicit:**
+- Symbol IDs are `"{path}::{dotted local name}"`, not real dotted module fqnames —
+  `resolver.py`'s `_path_to_fqname` needs a repo source root this function doesn't have
+  (it parses one file in isolation, no cross-file import resolution), and a path-scoped ID
+  is unique enough for a per-file metric.
+- A fully deleted symbol (present in `before`, gone from `after`) is attributed by also
+  diffing in the reverse direction and parsing `before`'s own tree — `after`'s parse tree
+  has nothing to attribute it to.
+- `1.0`, not `0.0`/undefined, when neither side changed anything (trivial agreement) or
+  when both diff-line sets are empty — "nothing to compare" must not look like "totally
+  disagreed." When only ONE side changed nothing, that side's rate is `0.0`, matching
+  `ClassFixSuccess.fix_rate`'s existing "0 attempts → 0.0" precedent.
+- `ruff format` is invoked directly via subprocess even though `ruff` is a dev extra
+  (`pyproject.toml`), not a core runtime dependency — accepted because `eval/` is
+  interview-facing tooling always run from this project's own dev environment, never a
+  stripped-down production install of the agent package. Falls back to unformatted text
+  (logged, not silent) if formatting fails, since a genuinely broken intermediate state
+  (the agent's own edit could be syntactically invalid) shouldn't crash a whole eval run's
+  reporting over one file.
+
+**Deliberately NOT wired into `RepoResult`/`score_run` yet.** Computing this per-repo
+needs the human's real fix content (`RepoSpec.post_sha`, requiring a new git checkout
+`run_repo` doesn't do today) and an aggregation policy across every file the agent
+touched (mean? median? weighted by lines changed?) — real I/O and a real design decision,
+which would violate `score_run`'s own "pure function, no I/O" contract if stuffed in
+directly. That's `eval/harness.py`'s job, as its own next step once there's agreement on
+how to fetch the human-fix content and aggregate across files, not an automatic
+continuation of building the metric functions themselves.
+
+**Interview:** "The phase-5 doc describes this at the level of 'diff the two diffs,' but
+the second you need to know WHICH function a change is in, you need a parse tree, not a
+diff — so the real interface question wasn't 'how do I compare two diffs,' it was 'what's
+the cheapest way to get from two diffs to two parse trees,' and the answer was: don't
+round-trip through diff text at all, since this project already has the file content on
+both sides everywhere this metric would actually get called."
+
+---
+
 ## Template
 
 ```
