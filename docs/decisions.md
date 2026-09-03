@@ -1969,6 +1969,99 @@ correctly on the narrow view they were designed around."
 
 ---
 
+## D48 — Added GroqModelClient: Gemini's free tier can't support real development
+
+**Alternatives:** wait out Gemini's free-tier quota (rejected — see below); enable
+billing on the Gemini key instead of adding a second provider; get a real Anthropic or
+OpenAI key.
+
+**Why:** Gemini's `gemini-3.6-flash` free tier (`GenerateRequestsPerDayPerProjectPerModel-
+FreeTier`, limit 20) turned out not to be a clean once-a-day reset. Direct evidence: fully
+exhausted by ~11pm, still 429ing after 35+ minutes of retries, then ONE call succeeded at
+09:40 the next morning — and the very next call, seconds later, 429'd again with a ~33s
+retry hint. That's a slow trickle-refill (something on the order of one request/hour), not
+a daily bucket — unusable for iterative development, where a single debugging cycle
+(change code, retest) needs a fast turnaround, and unusable at any real scale for Phase 5's
+larger ablation matrix.
+
+Considered enabling Gemini billing instead of adding a new client — genuinely the cheapest
+option in isolation (Gemini's own pay-as-you-go pricing is lower per-token than Groq's for
+comparable models). Went with Groq anyway because a real key was already in hand and
+verified working end-to-end in minutes, at zero cost, with headroom that makes the billing
+question moot for this project's actual call volume: `openai/gpt-oss-120b` on this account
+measured `x-ratelimit-limit-requests: 1000` (confirmed against Groq's own published
+developer-plan docs at console.groq.com/docs/models: 1K RPM, 250K TPM) — orders of
+magnitude beyond what a handful of corpus runs need. Real, verified pricing sourced from
+that same page ($0.15/1M input, $0.60/1M output) rather than guessed, matching
+`GeminiModelClient`'s own no-silent-$0 stance — `_GROQ_PRICE_PER_TOKEN_USD` raises
+`ValueError` for any model without a confirmed entry, same as Gemini's dict.
+
+`GroqModelClient` mirrors `GeminiModelClient`'s shape exactly (same `ModelClient` Protocol,
+same `from_env()` pattern, same temperature=0 for I6 reproducibility) against Groq's
+OpenAI-compatible `/chat/completions` endpoint. The empty-response guard
+(`GeminiEmptyResponseError` → renamed `ModelEmptyResponseError`) is now shared across both
+providers rather than named after whichever one happened to hit the failure mode first —
+a small, real rename since it stopped being Gemini-specific the moment a second real
+client needed the identical guard for the identical reason (a `max_tokens` budget consumed
+entirely by internal reasoning before any visible output).
+
+Gemini's client and key are kept, not removed — real comparison data, and useful if
+Groq's own limits ever become the constraint instead.
+
+**Interview:** "The free tier's failure mode here wasn't obvious from the error message
+alone — 'quota exceeded, limit 20' reads exactly like a clean daily reset until you watch
+it not reset after 35 minutes, then partially recover by exactly one request the next
+morning. I didn't guess at Groq's pricing either, even though I generally know their
+public numbers are cheap — I pulled the actual current developer-plan table and cross-
+checked it against the account's own rate-limit headers before writing a number into code
+that this project's own cost-reporting depends on. Reusing GeminiModelClient's exact shape
+for the new client, down to the same reproducibility argument for temperature=0, was
+deliberate: this seam is supposed to make a provider swap a non-event everywhere else in
+the codebase, and it was — zero changes needed in agent/graph.py."
+
+---
+
+## D49 — `GroqModelClient` retries a transient 429 instead of failing the whole repo run
+
+**Alternatives:** handle the retry in `agent/graph.py`'s `repair()` instead of inside
+the client; don't special-case 429 at all and rely on `agent/graph.py`'s existing
+`repair_failed` → `status="failed"` path (D24) to just end the run, same as Gemini's.
+
+**Why:** the very first live corpus run against `GroqModelClient` (right after D48)
+showed a real, different failure shape than Gemini's: Groq's 429 recovers within seconds,
+not hours — several repos hit exactly one transient rate-limit and then `repair()`'s
+D24-era handling (any `complete()` exception → `status="failed"`, run ends) stopped them
+cold. `Aiven-Open__rohmu` is the clearest evidence: a run ended after one 429 with zero
+progress, on a repo independently known (an earlier Gemini run, same session) to go from
+fully blocked to 173/195 passing in exactly two successful calls. The rate-limit itself
+wasn't the problem — giving up immediately after hitting it was.
+
+Rejected handling this in `repair()`: that function's exception handling is deliberately
+generic (any `ModelClient`, any provider) and correctly treats every OTHER failure —
+malformed response, auth error, `ModelEmptyResponseError` — as genuinely fatal. Whether a
+429 is "wait a few seconds and it'll work" or "this key is done for the day" is provider-
+specific knowledge (Gemini's isn't, Groq's is) that belongs inside the client actually
+talking to that provider, not leaked into the shared loop. `GeminiModelClient` gets no
+equivalent retry — its 429 was a structural daily-quota wall (D48); retrying there would
+only waste wall-clock time reproducing the same failure.
+
+`GroqModelClient._post_with_retry` retries up to 3 times, respecting the server's own
+`Retry-After` header when present (a real HTTP convention, not a Groq-specific guess) and
+falling back to a short fixed delay (2s, 4s, 6s) otherwise. From `repair()`'s perspective
+a retried-then-succeeded call is indistinguishable from an immediately-successful one —
+the seam this client sits behind still returns exactly one `ModelResponse` or raises,
+same as before.
+
+**Interview:** "The first real corpus run against the new client told me the failure
+mode wasn't the same as Gemini's, even though the HTTP status code was identical — 429
+means completely different things depending on the provider's actual quota model, and
+conflating them would have meant either wastefully retrying Gemini's daily wall or
+giving up too early on Groq's momentary one. I already had the evidence for both, from
+two runs in the same session against the same repos, so this wasn't a guess about which
+behavior each provider needed."
+
+---
+
 ## Template
 
 ```

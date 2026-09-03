@@ -259,9 +259,13 @@ runnable as a config" acceptance criterion.
 `repair()` — the T2/T3 node that calls the model on a failing test run — is real, exercised
 against a live model, and now actually applies what it produces (docs/decisions.md
 D24/D25/D28), not just `FakeModelClient`. There is still no `ANTHROPIC_API_KEY` in this
-environment; `GeminiModelClient` (`agent/model_client.py`) implements the same `ModelClient`
-Protocol against Google's Generative Language API instead, verified live (a real
-`generateContent` call, real token/cost accounting, sourced pricing). Full path, via
+environment; two real `ModelClient` implementations exist instead (`agent/model_client.py`):
+`GeminiModelClient` against Google's Generative Language API, and `GroqModelClient`
+(D48, the primary one in practice — Gemini's free tier turned out to trickle-refill rather
+than reset daily, impractical for real iteration) against Groq's OpenAI-compatible endpoint.
+Both verified live (a real completion call, real token/cost accounting, sourced pricing)
+and share one `ModelEmptyResponseError` for the same "max_tokens consumed entirely by
+reasoning" failure mode. Full path, via
 `agent/repair.py`: identify a target file from the failure (two strategies — traceback path
 parsing, or grepping the repo for a class named in a pydantic `ValidationError` message, D25
 explains why one heuristic doesn't cover both real failure shapes) → find any LOCAL base

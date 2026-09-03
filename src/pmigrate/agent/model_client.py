@@ -18,6 +18,7 @@ behind it.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -76,13 +77,16 @@ _GEMINI_PRICE_PER_TOKEN_USD: dict[str, dict[str, float]] = {
 }
 
 
-class GeminiEmptyResponseError(Exception):
-    """Raised when Gemini returns no usable text. Reproduced live, not hypothetical: with
-    too small a `max_output_tokens`, the model spends its entire budget on internal
-    'thinking' tokens and returns `content: {}` with `finishReason: "MAX_TOKENS"` — a
-    real response, HTTP 200, just with nothing usable in it. Returning `text=""` here
-    instead of raising would let `agent/graph.py`'s repair() proceed to build a diff out
-    of nothing; better to fail loud at the seam than corrupt a repair attempt silently."""
+class ModelEmptyResponseError(Exception):
+    """Raised when a model returns no usable text. Reproduced live against Gemini, not
+    hypothetical: with too small a `max_output_tokens`, the model spends its entire budget
+    on internal 'thinking' tokens and returns `content: {}` with `finishReason:
+    "MAX_TOKENS"` — a real response, HTTP 200, just with nothing usable in it. Returning
+    `text=""` here instead of raising would let `agent/graph.py`'s repair() proceed to
+    build a diff out of nothing; better to fail loud at the seam than corrupt a repair
+    attempt silently. Shared across providers (docs/decisions.md D48 added GroqModelClient)
+    rather than named after the first one that hit it — the failure mode isn't Gemini-
+    specific."""
 
 
 @dataclass
@@ -147,11 +151,112 @@ class GeminiModelClient:
         text = "".join(p.get("text", "") for p in parts)
         if not text:
             finish_reason = candidates[0].get("finishReason") if candidates else "NO_CANDIDATES"
-            raise GeminiEmptyResponseError(
+            raise ModelEmptyResponseError(
                 f"Gemini returned no usable text (finishReason={finish_reason!r}, "
                 f"thoughts_tokens={usage.get('thoughtsTokenCount', 0)}) — "
                 f"max_output_tokens={self.max_output_tokens} was likely consumed entirely "
                 "by thinking before any visible output; raise max_output_tokens."
+            )
+
+        return ModelResponse(
+            text=text, usd_cost=usd_cost, tokens_in=tokens_in, tokens_out=tokens_out
+        )
+
+
+GROQ_API_BASE = "https://api.groq.com/openai/v1"
+
+# Sourced from https://console.groq.com/docs/models on 2026-09-03 ("developer plan" tier,
+# the one this project's key is actually on — confirmed live via the same key's own
+# x-ratelimit-limit-requests: 1000 response header matching that page's documented
+# "1K RPM" for this model exactly). Same non-negotiable-pricing-entry stance as Gemini's
+# dict above: a model with no verified number here raises rather than silently reporting
+# $0 or a guessed cost.
+_GROQ_PRICE_PER_TOKEN_USD: dict[str, dict[str, float]] = {
+    "openai/gpt-oss-120b": {"input": 0.15e-6, "output": 0.60e-6},
+}
+
+
+@dataclass
+class GroqModelClient:
+    """Talks to Groq's OpenAI-compatible chat/completions endpoint (docs/decisions.md D48)
+    — a second real `ModelClient`, added once Gemini's free-tier daily quota (20
+    requests/day, confirmed live to trickle-refill rather than reset cleanly) turned out
+    to make iterative development impractical. Groq's `openai/gpt-oss-120b` on the same
+    account's key measured 1000 req/min of headroom — orders of magnitude more usable for
+    this project's actual call volume (a handful to a few dozen repair attempts per run).
+    """
+
+    api_key: str
+    model: str = "openai/gpt-oss-120b"
+    # mirrors GeminiModelClient's own reasoning (D26): repair asks for the WHOLE corrected
+    # file, not a diff, so this needs to scale with file size, not just "thinking" budget.
+    max_output_tokens: int = 32768
+
+    # Found live (docs/decisions.md D49): unlike Gemini's persistent daily-quota 429
+    # (D48 — retrying just wastes time hitting the same wall), Groq's 429 recovers within
+    # seconds, and every retry observed live succeeded on the very next attempt. Real
+    # corpus repos got cut short on one transient rate-limit despite the model going on to
+    # make genuine progress moments later (`rohmu` needed exactly 2 calls to go from fully
+    # blocked to 173/195 passing in an earlier Gemini run) — retrying belongs at this
+    # client's own HTTP layer, not `agent/graph.py`'s repair(), which should keep treating
+    # every OTHER failure (auth, malformed response) as the real, fatal error it is.
+    _MAX_RETRIES: int = 3
+
+    @classmethod
+    def from_env(cls, model: str = "openai/gpt-oss-120b") -> GroqModelClient:
+        key = os.environ.get("GROQ_API_KEY")
+        if not key:
+            raise ValueError("GROQ_API_KEY not set")
+        return cls(api_key=key, model=model)
+
+    def _post_with_retry(self, system: str, prompt: str) -> requests.Response:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            # temperature=0 for the same I6 reproducibility reason as GeminiModelClient.
+            "temperature": 0,
+            "max_completion_tokens": self.max_output_tokens,
+        }
+        for attempt in range(self._MAX_RETRIES + 1):
+            resp = requests.post(
+                f"{GROQ_API_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=body,
+                timeout=120,
+            )
+            if resp.status_code != 429 or attempt == self._MAX_RETRIES:
+                return resp
+            # Groq's own Retry-After (seconds) when present; a short fixed fallback
+            # otherwise — observed live 429s recovered within a few seconds, not minutes.
+            delay = float(resp.headers.get("Retry-After", 2 * (attempt + 1)))
+            time.sleep(delay)
+        return resp  # unreachable — loop always returns on its last iteration
+
+    def complete(self, system: str, prompt: str) -> ModelResponse:
+        resp = self._post_with_retry(system, prompt)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+
+        usage = data.get("usage", {})
+        tokens_in = usage.get("prompt_tokens", 0)
+        tokens_out = usage.get("completion_tokens", 0)
+
+        price = _GROQ_PRICE_PER_TOKEN_USD.get(self.model)
+        if price is None:
+            raise ValueError(f"no pricing entry for model {self.model!r} — add one before using it")
+        usd_cost = tokens_in * price["input"] + tokens_out * price["output"]
+
+        choices = data.get("choices", [])
+        text = choices[0].get("message", {}).get("content", "") if choices else ""
+        if not text:
+            finish_reason = choices[0].get("finish_reason") if choices else "NO_CHOICES"
+            raise ModelEmptyResponseError(
+                f"Groq returned no usable text (finish_reason={finish_reason!r}) — "
+                f"max_output_tokens={self.max_output_tokens} was likely consumed entirely "
+                "by reasoning before any visible output; raise max_output_tokens."
             )
 
         return ModelResponse(
