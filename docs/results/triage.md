@@ -96,18 +96,19 @@ anything else) reached the exact same point — T1 applied, 2/92 passing, classi
 progress on the same unclosed connection, well past `GroqModelClient`'s own `timeout=120`
 + 3 retries (docs/decisions.md D49), which should have raised an error either way. Two
 different socket states across two attempts both failing to resolve within the client's
-stated timeout points at an infrastructure-level problem — either something about this
-specific request (payload size/shape for this repo) that the Groq API or an intermediate
-proxy handles by holding the connection open indefinitely instead of responding or
-closing, or a local networking/sandbox condition that prevents `requests`' own read
-timeout from firing — rather than a fluke in one run. The harness's `wallclock_cap_s=900`
-budget check (`agent/budget.py`) is evaluated between graph nodes, not as a hard interrupt
-on a blocking call, so it can't rescue a call that never returns either way. Both attempts
-were killed manually. **This cell is an infrastructure gap, not a zero** — treat
-`okfn__opendataeditor`'s OFF-arm score as unmeasured, and treat the hang itself as a
-finding: repair calls against this repo (at least) can stall past the client's own
-declared timeout, independent of `use_triage`, which is worth root-causing before trusting
-any Groq-backed run's silence to mean "no requests are stuck."
+stated timeout looked at the time like an infrastructure-level problem outside this
+project's code. **Root-caused since** (docs/decisions.md D53): it wasn't infrastructure at
+all. `GroqModelClient._post_with_retry` (D49) slept for Groq's `Retry-After` header value
+**uncapped** and logged nothing before sleeping — a large header value on a transient 429
+produces exactly this signature (a live process, near-zero CPU, a stale socket) with no
+way to tell it apart from a real network stall from the outside. Confirmed live: the SAME
+signature recurred on `Aiven-Open__rohmu` (a different repo entirely) on a later run, with
+a THIRD different socket state (`CLOSED`) — three sightings, three socket states, one
+underlying cause. D53 caps the sleep at 30s and logs before sleeping, so this specific
+failure mode shouldn't recur in future runs, but it was still real and unresolved for
+*this* run's data. **This cell remains an infrastructure-adjacent gap, not a zero** —
+treat `okfn__opendataeditor`'s OFF-arm score as unmeasured for this writeup; a rerun after
+D53 would be expected to complete normally.
 
 ## Preliminary per-class attempt tally (`use_triage=True` arm, all 7 repos)
 
@@ -125,12 +126,9 @@ sample size — read it as "what happened in these attempts," not a rate.
 
 - **`okfn__opendataeditor`'s `use_triage=False` score.** Unmeasured, not zero — hung on
   two separate attempts (the full corpus run and an isolated targeted rerun), both killed
-  manually. This is now a suspected infrastructure issue (a `requests` call that outlives
-  its own `timeout=120` with no exception raised) rather than a one-off, and it should be
-  root-caused — e.g. reproduce outside the harness with a bare `requests.post` against the
-  same payload, check for a network proxy in the sandbox environment that silently holds
-  connections open — before trusting this pipeline's silence elsewhere to mean "nothing is
-  stuck."
+  manually. Root-caused since (D53: an uncapped `Retry-After` sleep in
+  `GroqModelClient._post_with_retry`, now fixed) — a rerun should complete normally, just
+  hasn't been done yet for this writeup.
 - **Classifier accuracy on a hand-labelled set.** `docs/results/triage_failures_dev.jsonl`
   has real residual failures with predicted classes and full traceback text, but nothing
   has been hand-labelled against it yet, and it's overwritten each run rather than

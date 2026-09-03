@@ -171,6 +171,27 @@ def test_groq_falls_back_to_a_short_delay_without_retry_after_header() -> None:
     assert mock_sleep.call_args[0][0] > 0  # some positive fallback delay
 
 
+def test_groq_caps_an_oversized_retry_after_delay() -> None:
+    # docs/decisions.md D53: found live -- an uncapped Retry-After turned three separate
+    # 429s (across three unrelated repos) into multi-minute silent hangs, indistinguishable
+    # from a real network stall from the outside. The header value here (600s) must be
+    # capped, not honored verbatim.
+    ok_body = {
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+    }
+    responses = [_response(429, headers={"Retry-After": "600"}), _response(**ok_body)]
+    client = GroqModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", side_effect=responses),
+        patch("pmigrate.agent.model_client.time.sleep") as mock_sleep,
+    ):
+        result = client.complete(system="sys", prompt="prompt")
+
+    assert result.text == "OK"
+    mock_sleep.assert_called_once_with(GroqModelClient._MAX_RETRY_DELAY_S)
+
+
 def test_groq_gives_up_after_max_retries_and_raises() -> None:
     responses = [_response(429) for _ in range(10)]  # more than _MAX_RETRIES + 1
     client = GroqModelClient(api_key="test-key")

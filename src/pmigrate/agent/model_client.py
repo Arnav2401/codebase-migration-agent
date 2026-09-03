@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import requests
+import structlog
+
+log = structlog.get_logger()
 
 
 @dataclass(frozen=True)
@@ -201,6 +204,16 @@ class GroqModelClient:
     # client's own HTTP layer, not `agent/graph.py`'s repair(), which should keep treating
     # every OTHER failure (auth, malformed response) as the real, fatal error it is.
     _MAX_RETRIES: int = 3
+    # docs/decisions.md D53: found live — an UNCAPPED `Retry-After`-driven sleep here was
+    # silently masquerading as three separate "infra hangs" across three different repos
+    # (opendataeditor, rohmu, madkote), each looking like a stuck network connection from
+    # the outside (a live process, near-zero CPU, a stale socket) because this method logs
+    # nothing before sleeping. Capping bounds the worst case to a few minutes total across
+    # all retries and, more importantly, makes a real long cooldown FAIL FAST and visibly
+    # (the next attempt still 429s, `complete()`'s `raise_for_status()` surfaces it,
+    # `repair()` already treats that as a clean `status="failed"`) instead of hanging
+    # silently for however long Groq's header actually says.
+    _MAX_RETRY_DELAY_S: float = 30.0
 
     @classmethod
     def from_env(cls, model: str = "openai/gpt-oss-120b") -> GroqModelClient:
@@ -231,7 +244,16 @@ class GroqModelClient:
                 return resp
             # Groq's own Retry-After (seconds) when present; a short fixed fallback
             # otherwise — observed live 429s recovered within a few seconds, not minutes.
-            delay = float(resp.headers.get("Retry-After", 2 * (attempt + 1)))
+            # Capped (D53): an uncapped header value turned three unrelated 429s into
+            # multi-minute silent hangs indistinguishable from a real network stall.
+            raw_delay = float(resp.headers.get("Retry-After", 2 * (attempt + 1)))
+            delay = min(raw_delay, self._MAX_RETRY_DELAY_S)
+            log.warning(
+                "model_client.rate_limited",
+                attempt=attempt,
+                retry_after_s=raw_delay,
+                sleeping_s=delay,
+            )
             time.sleep(delay)
         return resp  # unreachable — loop always returns on its last iteration
 

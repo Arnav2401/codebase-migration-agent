@@ -2184,6 +2184,47 @@ premise is against."
 
 ---
 
+## D53 — Cap `GroqModelClient`'s Retry-After-driven sleep
+
+**Alternatives:** treat each occurrence as a one-off infrastructure/network flake and keep
+manually killing + rerunning; add a hard per-attempt timeout instead of capping the sleep
+specifically.
+
+**Why:** three separate live corpus runs each produced what looked like a stuck network
+connection — a live process, near-zero CPU, a stale socket — on three UNRELATED repos
+(`okfn__opendataeditor`, `Aiven-Open__rohmu`, `madkote__fastapi-plugins`), each initially
+documented as a likely infra issue (docs/results/triage.md). The actual cause: D49's own
+`_post_with_retry` does `time.sleep(delay)` with `delay` taken directly from Groq's
+`Retry-After` header, uncapped, and logs nothing before sleeping — so an unusually large
+header value produces a multi-minute silent gap that is externally indistinguishable from
+a genuine network stall (the varying socket states observed across the three
+occurrences — `CLOSE_WAIT`, `ESTABLISHED`, `CLOSED` — are just snapshots of different
+points in the same sleep/retry cycle, not evidence of three different problems). A
+per-attempt timeout was rejected as solving the wrong layer: `requests.post`'s own
+`timeout=120` already bounds each HTTP call; the unbounded part was always the sleep
+BETWEEN attempts, which a request timeout can't touch.
+
+**Fixed by** adding `_MAX_RETRY_DELAY_S = 30.0` and capping via `min(raw_delay,
+_MAX_RETRY_DELAY_S)`, plus a `log.warning` before sleeping so a future occurrence is
+visible in the run log immediately instead of requiring `lsof`/`ps` forensics. This also
+changes the failure mode for a genuinely long cooldown (if Groq ever means it) from
+"hang silently for however long the header says" to "retry a few times at the capped
+delay, then fail fast and visibly" — `complete()`'s existing `raise_for_status()` surfaces
+it, and `repair()` already treats that as a clean `status="failed"`, exactly the D48/D49
+precedent for Gemini's own persistent-quota case ("retrying just wastes time hitting the
+same wall").
+
+**Interview:** "Three hangs on three different repos looked like three different flaky
+infrastructure problems until I actually read the retry code instead of re-diagnosing the
+socket each time. The tell was that the socket state was different every time — CLOSE_WAIT,
+then ESTABLISHED, then CLOSED — which doesn't fit 'the network is stuck,' but fits exactly
+'I'm sampling a sleep() at different points in its retry loop.' The fix is small because
+the bug was small: one uncapped number and one missing log line turned a normal,
+correctly-designed retry mechanism into something that looked like a much bigger problem
+than it was."
+
+---
+
 ## Template
 
 ```
