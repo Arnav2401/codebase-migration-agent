@@ -174,6 +174,36 @@ def test_load_all_filters_by_corpus_sha_when_given(tmp_path: Path) -> None:
     assert [r.repo_id for r in loaded] == ["acme__a"]
 
 
+def test_load_all_order_is_stable_across_a_replace(tmp_path: Path) -> None:
+    """docs/decisions.md D68: found live -- re-running one arm (DELETE its rows, let
+    `save_result`'s `INSERT OR REPLACE` write them fresh) changed `write_main_report`'s
+    bootstrap CI for that arm even though every per-repo `pass_rate` was byte-identical to
+    before. Root cause: SQLite gives no ordering guarantee for a `SELECT` without
+    `ORDER BY`, and a `REPLACE`d row (this table has no `WITHOUT ROWID`) gets a NEW rowid
+    appended at the end of the table's physical order -- so the exact same logical rows
+    can come back in a different order purely from write history, and `bootstrap_mean_ci`
+    (`eval/stats.py`) resamples by INDEX into that order, making the "seed=0" CI silently
+    order-dependent. This replaces one already-stored repo's result (same primary key,
+    triggering SQLite's internal delete+insert-at-a-new-rowid) and asserts `load_all()`'s
+    order is unaffected -- would have failed before the `ORDER BY repo_id, config_hash`
+    fix, since the replaced repo would move to the end of an unordered scan."""
+    store = ResultStore(tmp_path / "results.db")
+    store.save_result(_result("acme__a"), "deadbeef", written_at=1.0)
+    store.save_result(_result("acme__b"), "deadbeef", written_at=2.0)
+    store.save_result(_result("acme__c"), "deadbeef", written_at=3.0)
+
+    order_before = [r.repo_id for r in store.load_all()]
+
+    # re-save the SAME key -- same (repo_id, config_hash, corpus_sha) -- forcing SQLite's
+    # internal REPLACE (delete + insert at a fresh rowid), the exact history that broke
+    # ordering live.
+    store.save_result(_result("acme__b"), "deadbeef", written_at=4.0)
+
+    order_after = [r.repo_id for r in store.load_all()]
+
+    assert order_before == order_after == ["acme__a", "acme__b", "acme__c"]
+
+
 def test_save_result_is_safe_under_real_concurrent_writes(tmp_path: Path) -> None:
     # docs/decisions.md D66: run_corpus's parallel mode hands ONE ResultStore instance to
     # every worker thread. Without check_same_thread=False + the instance lock, this

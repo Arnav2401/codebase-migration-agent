@@ -187,14 +187,31 @@ class ResultStore:
         `write_main_report` needs this to combine arms, the one need D63 deliberately
         deferred building ("a natural next step for the report generator"). Optionally
         scoped to one `corpus_sha` -- combining results scored against different corpus
-        content into one report would silently mix runs that aren't comparable."""
+        content into one report would silently mix runs that aren't comparable.
+
+        `ORDER BY repo_id, config_hash` (docs/decisions.md D68): SQLite gives NO ordering
+        guarantee for a `SELECT` without one -- physically identical DATA can come back in
+        a different ROW order depending on the table's insert/delete history (e.g. a
+        `DELETE` + fresh `INSERT OR REPLACE` for one arm vs. another arm's untouched
+        original rows), even though nothing about the actual results changed. That silently
+        broke `write_main_report`'s "seed=0" reproducibility claim (D65): `bootstrap_mean_ci`
+        (`eval/stats.py`) resamples by INDEX into the list this method returns, so the same
+        seed over the same logical data in a different row order picks a different resampled
+        multiset and produces a different CI -- found live when re-running one arm changed
+        its bootstrap CI with byte-identical per-repo pass_rates. A stable, explicit order
+        makes the list's order (and therefore the seeded resample) independent of physical
+        row history, not just independent of read timing."""
         with self._lock:
             if corpus_sha is not None:
                 rows = self._conn.execute(
-                    "SELECT result_json FROM results WHERE corpus_sha = ?", (corpus_sha,)
+                    "SELECT result_json FROM results WHERE corpus_sha = ? "
+                    "ORDER BY repo_id, config_hash",
+                    (corpus_sha,),
                 ).fetchall()
             else:
-                rows = self._conn.execute("SELECT result_json FROM results").fetchall()
+                rows = self._conn.execute(
+                    "SELECT result_json FROM results ORDER BY repo_id, config_hash"
+                ).fetchall()
         return [_result_from_dict(json.loads(row[0])) for row in rows]
 
     def save_result(self, result: RepoResult, corpus_sha: str, *, written_at: float) -> None:
