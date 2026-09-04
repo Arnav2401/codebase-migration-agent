@@ -3087,6 +3087,69 @@ finding it required actually noticing a number that shouldn't have changed, did.
 
 ---
 
+## D69 — Recurring finding: every real repair this session ever produced fixed nothing
+
+**Alternatives:** treat each "applied cleanly, zero effect on pass_rate" result as an
+isolated, arm-specific data point — rejected once the SAME `(repo, strategy)` pair showed
+up as a repeat offender across TWO DIFFERENT LLM PROVIDERS, which stops being "one
+model's quirk" and starts being a property of the fix strategy or the repo itself.
+Chasing an explanation by reading the actual generated patches right now — rejected as
+scope creep on this write-up: this entry exists to record that the pattern is real and
+reproducible before that investigation happens, not to preempt it with a guess.
+Dismissing it as "just small N" — rejected: small N is true and stated plainly below, but
+small N that reproduces identically across independent runs and independent providers is
+still real signal, not noise to wave away.
+
+**Why:** across every arm this session got a genuine (non-quota-blocked) repair attempt
+through on — `graph`, `wholefile`, and `model_groq` — not one single applied repair ever
+changed a repo's `pass_rate`. Every instance:
+
+- **`SupImDos__pydantic-argparse` + `missing_t1_rule`** — applied cleanly, stayed at
+  `pass_rate=0.0`, in `graph`'s one real run (Gemini, $0.0358, iterations=2) AND in all
+  four `model_groq` runs (Groq, ~$0.0005–0.0008 each, iterations=2 each). Same repo, same
+  strategy, same zero effect, across **two different model providers** — the strongest
+  single data point here, since it rules out "this one model's output is bad" as the
+  explanation.
+- **`cmudig__draco2` + `fix_class_def`** — applied cleanly, landed at the exact same
+  `0.884` T1-only baseline, reproduced identically across all four `model_groq` runs
+  (~$0.0011–0.0012 each, iterations=2 each).
+- **`Aiven-Open__rohmu` + `fix_class_def`** — applied cleanly (two files rewritten),
+  stayed at `pass_rate=0.0`, in `graph`'s one real run (Gemini, $0.0897, iterations=2).
+- **`madkote__fastapi-plugins` + `fix_import`** — applied cleanly (two files rewritten,
+  `fastapi_plugins/plugin.py` and `demo.py`), stayed at `pass_rate=0.0`, in `wholefile`'s
+  one real run (Gemini, $0.037).
+
+Every one of these was mechanically accepted — `violations=[]`, no rejected patch, no
+invariant violation (`apply_patch`'s I1-I3 chokepoint let every one of them through) — and
+a subsequent `run_tests` iteration confirmed the failure was still there afterward. This
+is a DIFFERENT failure mode from `iscc__iscc-core`'s own repeat offense in `graph`'s real
+run: two `repair_rejected` attempts, both failing to even parse as a valid diff against
+the graph-retrieved context (`corrupt patch at line 392`, identical both times) — that's
+repair failing to LAND at all, not repair landing and doing nothing. Worth keeping
+separate: one is a patch-generation/parsing problem, the other is a patch-content problem.
+
+**The honest limit on this finding:** N is small — four distinct `(repo, strategy)`
+pairs, nine total independent applications counting `model_groq`'s four repeats each for
+two of them. Every real attempt this session got through happened to fail to fix
+anything, but "every attempt this session got through" is itself a small, quota-starved
+sample (Gemini's 429 wall blocked the vast majority of possible attempts across
+`graph`/`wholefile`/`no_t1`/`no_triage`, per D48). This is not "repair doesn't work" —
+it's "in the handful of real attempts this session actually observed, none worked," which
+is a narrower, more honest claim, and the right one to make until a non-quota-starved run
+produces a larger sample.
+
+**Interview:** "The instinct with a result like this is to feel like the run failed —
+zero repairs actually fixed anything. But the finding isn't 'zero,' it's 'zero, and it's
+the SAME zero across two different LLM providers for one of the four cases.' That
+cross-provider repeat is what turns four scattered disappointing data points into one
+real, if narrow, empirical claim: something about how this pipeline selects a fix
+strategy or constructs its target, not about which model executes it, is producing
+patches that apply but don't work. I don't know which yet — that's the honest next
+question, not something I'd fabricate an answer to just because the pattern is
+suggestive."
+
+---
+
 ## Template
 
 ```
