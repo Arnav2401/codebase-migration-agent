@@ -2993,6 +2993,18 @@ slightly from the recorded `--max-workers 1` table (live Gemini 429 quota state 
 run-time, covered by that doc's own caveat 1) — not a correctness regression, and not
 promoted to a new canonical results table for that reason.
 
+Re-run live a second time, same day, after PR #3 (this fix) and PR #4 (the unrelated CI
+`ruff`-on-`PATH` fix) both merged to `main`: same command, same `--max-workers 4`, this
+time with Gemini actually answering (not quota-walled) — real `agent.repair_applied`
+entries with real token counts and cost across multiple repos concurrently, not just
+concurrent retrieval calls that happened to skip repair. Result: 7/7 repos scored, exit
+code 0, 2 full green, total cost $0.30, zero `harness.repo_failed`, and `Loading weights`
+still logged exactly ONCE — this time with four repos (`Aiven-Open__rohmu`,
+`SupImDos__pydantic-argparse`, `madkote__fastapi-plugins`, `okfn__opendataeditor`) genuinely
+running repair() concurrently against the shared embedder, not just racing to construct it.
+Strongest live evidence yet that the fix holds under real, sustained concurrent load, not
+only a narrow construction-timing window.
+
 **Interview:** "The crash didn't look like a bug at first glance — the process just
 vanished mid-run with no exception, which is what native-code races look like, not what
 Python-level bugs look like. The fix needs both parts because the shared-instance part
