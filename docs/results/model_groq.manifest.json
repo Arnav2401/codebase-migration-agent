@@ -1,0 +1,25 @@
+{
+  "agent_git_sha": "93f28553fba851b5c3acb17da506579859aa8c39",
+  "config": {
+    "model": "openai/gpt-oss-120b",
+    "name": "model_groq",
+    "retrieval": "graph",
+    "seed": 0,
+    "tiers": [
+      "T1",
+      "T2",
+      "T3"
+    ],
+    "triage": true,
+    "usd_cap_per_repo": 5.0
+  },
+  "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
+  "ended_at": 1788500188.587401,
+  "model": "openai/gpt-oss-120b",
+  "prompt_hashes": {
+    "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
+  },
+  "seed": 0,
+  "started_at": 1788500131.0304582,
+  "temperature": 0
+}
