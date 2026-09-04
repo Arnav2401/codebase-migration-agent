@@ -1,5 +1,5 @@
 {
-  "agent_git_sha": "f8e2bf738bab6f0a5390aba3f2c4096549154982",
+  "agent_git_sha": "76c0a93c77cf6bdf464bd11901de54d7718404ed",
   "config": {
     "model": "openai/gpt-oss-120b",
     "name": "model_groq",
@@ -14,12 +14,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788525520.031713,
+  "ended_at": 1788525969.669879,
   "model": "openai/gpt-oss-120b",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
   "seed": 0,
-  "started_at": 1788525467.436563,
+  "started_at": 1788525917.720533,
   "temperature": 0
 }
