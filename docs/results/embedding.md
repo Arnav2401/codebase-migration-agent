@@ -32,8 +32,21 @@
 > run, not that re-run's numbers — per-repo pass rates shift between live attempts purely
 > from Gemini 429 quota state at run-time (caveat 1), so the re-run wasn't promoted to a
 > new canonical table; it exists solely to confirm the crash is gone.
+>
+> **Re-run again 2026-09-04 (part of this session's later quota-refresh retry cycle
+> across arms) — D67's fix still holds, but quota-blocked this attempt.** `--max-workers
+> 4`, `sentence-transformers` genuinely installed (not just the ImportError path):
+> exit code 0, all 7 repos scored, no `harness.repo_failed`, and `Loading weights` logged
+> exactly ONCE again even though four repos (`SupImDos__pydantic-argparse`,
+> `madkote__fastapi-plugins`, `iscc__iscc-core`, `Aiven-Open__rohmu`) hit repair within
+> the same ~3-second window — the concurrency fix keeps holding under repeated live
+> exercise, not just the first two verification runs. Every repo needing repair hit an
+> immediate 429 this time, unlike the second verification run above which got real
+> repair traffic through — this arm shares the rest of this session's finding that
+> outcome depends on quota timing, not on anything wrong with the fix. Numbers below are
+> the T1-only-shaped degenerate result, byte-identical to `t1_only`.
 
-**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (T1-only; run sequentially, see caveats above)
+**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
