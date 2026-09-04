@@ -3021,6 +3021,72 @@ regression test that can't fail isn't proof of anything."
 
 ---
 
+## D68 — `ResultStore.load_all` needs `ORDER BY`: the bootstrap CI was silently order-dependent
+
+**Alternatives:** Sorting `results_by_config[name]` inside `write_main_report` itself
+(`eval/report.py`), right before calling `bootstrap_mean_ci` — rejected as fixing the
+symptom in one caller instead of the actual defect: `load_all()` is the only place that
+promises "every stored result," and any OTHER caller relying on its order (there's only
+one today, but the bug wasn't in `write_main_report`'s logic, it was in `load_all`'s
+contract) would still be silently exposed. Sorting inside `bootstrap_mean_ci` itself
+(`eval/stats.py`) — rejected: that function takes a bare `Sequence[float]` with no
+identity attached to each value, so it has no `repo_id` to sort BY; it would need to sort
+numerically, which changes nothing (the bug is about which VALUE lands at which INDEX
+relative to a fixed seed, not about numeric order). Fixing it at the SQL layer
+(`ORDER BY repo_id, config_hash`) is the one place that actually owns "what order do
+results come back in" and can make the guarantee explicit instead of accidental.
+
+**Why:** Found live, not hypothetically: re-running `no_t1` (docs/decisions.md's D67
+follow-up work — `graph`/`wholefile`/`no_t1`/`no_triage`/`model_groq` all got genuinely
+re-attempted with stale resume-cache rows cleared first) produced per-repo `pass_rate`
+values byte-identical to before, but `docs/results/main.md`'s regenerated bootstrap CI
+for `no_t1` shifted (`[0.003, 0.546]` → `[0.003, 0.549]`) while every OTHER arm's CI
+stayed put. Root cause: `ResultStore.load_all()` (`eval/store.py`) had no `ORDER BY` on
+its `SELECT` — SQLite gives no ordering guarantee without one, and the `results` table
+has no `WITHOUT ROWID`, so `save_result`'s `INSERT OR REPLACE` (D63) on an existing
+`(repo_id, config_hash, corpus_sha)` key does an internal delete-then-insert that assigns
+the replaced row a NEW, larger rowid — physically moving it to the end of an unordered
+table scan, even though its logical content didn't change at all. `no_t1`'s rows had just
+been deleted-and-reinserted (to force a genuine re-attempt instead of a resumed skip);
+every other arm's hadn't, this particular time. `write_main_report`'s bootstrap CI
+(D65, `eval/stats.py`'s `bootstrap_mean_ci`) resamples by calling `values[rng.randrange(n)]`
+— INDEX into the list `load_all()` returns, with a fixed `seed=0`. The seed makes the
+SEQUENCE OF INDICES reproducible; it says nothing about which repo's value sits at each
+index, so the identical seed applied to the identical seven numbers in a different order
+silently produced a different resampled distribution and a different CI. D65's own
+"seed=0" language promises reproducibility that `load_all`'s missing `ORDER BY` was
+quietly not delivering — a real I6 violation (PLAN.md §2: "every scored run is
+reproducible from its trace... seed"), not a cosmetic inconsistency.
+
+**Fixed by** adding `ORDER BY repo_id, config_hash` to both of `load_all`'s query
+branches (with and without a `corpus_sha` filter) — a stable, explicit order that no
+longer depends on the table's write/delete history, only on the data itself.
+`tests/eval/test_store.py::test_load_all_order_is_stable_across_a_replace` reproduces the
+exact live mechanism directly: save three results, capture `load_all()`'s order, re-save
+ONE of them (same primary key, forcing SQLite's internal replace-with-a-new-rowid), and
+assert the order is unchanged — confirmed to actually fail pre-fix (the replaced repo
+moves to the end: `['acme__a', 'acme__c', 'acme__b']` instead of alphabetical) by
+temporarily reverting the `ORDER BY` and watching it fail, then restoring the fix and
+watching it pass. Regenerating `docs/results/main.md` after the fix landed made every
+arm's CI converge to the identical `[0.003, 0.549]` — which is the CORRECT behavior, not
+a coincidence: every arm currently has the exact same seven per-repo `pass_rate` values
+this round (D67's follow-up work: 0/7 full green everywhere), so a deterministic,
+order-independent bootstrap SHOULD give them all the same interval. The pre-fix table's
+apparent "differences" between arms' CIs were never real signal — they were read noise
+from write-history-dependent row order, now gone.
+
+**Interview:** "This is the kind of bug that's invisible until you re-run something and
+the number moves for no reason you can explain from the data. The seed made me assume
+`bootstrap_mean_ci` was fully deterministic, and it WAS, deterministically over whatever
+list it was handed — I just hadn't checked that the list itself was guaranteed to arrive
+in the same order every time. It only surfaced because this session happened to
+delete-and-reinsert exactly one arm's rows while leaving the others untouched, which is
+precisely the kind of write-pattern asymmetry a single from-scratch eval run would never
+produce and a real, ongoing project inevitably will. The fix is one `ORDER BY` clause;
+finding it required actually noticing a number that shouldn't have changed, did."
+
+---
+
 ## Template
 
 ```
