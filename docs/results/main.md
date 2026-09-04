@@ -5,7 +5,7 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost |
 |---|---|---|---|---|
 | embedding | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
-| graph | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.04 |
+| graph | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | model_groq | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | no_triage | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
@@ -30,11 +30,11 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0897 | 2 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0358 | 2 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
 | cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.1793 | 3 |
+| iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
 | madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
 
