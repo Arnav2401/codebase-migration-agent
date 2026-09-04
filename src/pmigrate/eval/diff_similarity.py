@@ -15,13 +15,21 @@ numbers anyway.
 `ruff` is a dev extra (pyproject.toml), not a core runtime dependency -- invoked directly
 here via subprocess rather than made a hard dependency, since `eval/` is interview-facing
 tooling always run from this project's own dev environment (`.venv/bin/python`), never a
-stripped-down production install of the agent package itself.
+stripped-down production install of the agent package itself. Invoked as
+`[sys.executable, "-m", "ruff", ...]`, not a bare `"ruff"` on `PATH` -- a bare name only
+resolves if something put `.venv/bin` on `PATH` (e.g. an activated venv), which nothing in
+this project's own convention does (every Makefile target calls `.venv/bin/<tool>`
+directly instead). A bare `"ruff"` happening to resolve on a given dev machine just means
+some OTHER, unrelated `ruff` install is on that machine's `PATH` -- exactly the kind of
+false pass that let this ship broken for CI's clean runner (no such incidental install)
+while looking fine locally.
 """
 
 from __future__ import annotations
 
 import difflib
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -43,7 +51,7 @@ def _ruff_format(text: str) -> str:
     unnormalized text and may read lower than a clean comparison would."""
     try:
         result = subprocess.run(
-            ["ruff", "format", "-"],
+            [sys.executable, "-m", "ruff", "format", "-"],
             input=text,
             capture_output=True,
             text=True,
