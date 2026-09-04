@@ -1,19 +1,16 @@
 # Eval results — `no_triage`
 
-> **Re-run 2026-09-04 (third attempt) — genuinely re-attempted (stale cache cleared
-> first), same quota wall, same real finding reproduces a third time.** 6 of 7 repos hit
-> Gemini's 429 wall immediately. `eyurtsev__kor` again gets the distinct `triage=False`
-> code path: D37's all-preexisting skip is disabled, repair genuinely fires
-> (`iterations=2`) and hits `agent.repair_no_target` — identical outcome to both prior
-> runs. Three consecutive independent runs producing the exact same
-> `repair_no_target` result removes any doubt this is a reliable behavior of the
-> `use_triage=False` path on this specific repo, not noise. Numbers otherwise
-> byte-identical to every prior attempt and to `wholefile`/`no_t1`'s own re-runs today
-> (see their notes) — this arm shares the same "hasn't landed inside the quota window"
-> problem.
+> **Re-run 2026-09-04 (fourth attempt) — same quota wall, same real finding reproduces
+> a fourth time.** 6 of 7 repos hit Gemini's 429 wall immediately. `eyurtsev__kor` again
+> gets the distinct `triage=False` path: D37's all-preexisting skip is disabled, repair
+> genuinely fires (`iterations=2`) and hits `agent.repair_no_target` — identical outcome
+> to all three prior runs. Four consecutive independent runs producing the exact same
+> `repair_no_target` result confirms this is a stable, real behavior of the
+> `use_triage=False` path on this specific repo. Numbers otherwise byte-identical to
+> every prior attempt.
 
 **7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (quota-blocked again
-except eyurtsev__kor's third confirmed no-target attempt, see caveat above)
+except eyurtsev__kor's fourth confirmed no-target attempt, see caveat above)
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
