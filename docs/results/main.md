@@ -43,7 +43,7 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0006 | 2 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0008 | 2 |
 | cmudig__draco2 | 0.884 | False | 0.0012 | 2 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
 | iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
