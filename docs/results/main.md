@@ -10,7 +10,7 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | no_triage | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | t1_only | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
-| wholefile | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.01 |
+| wholefile | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 
 ## Per-repo appendix
 
@@ -95,5 +95,5 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
 | iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
-| madkote__fastapi-plugins | 0.000 | False | 0.0367 | 2 |
+| madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
