@@ -1,5 +1,5 @@
 {
-  "agent_git_sha": "f5c51bcb7bac08575b8965677a3f5fce79d0b17c",
+  "agent_git_sha": "8a133660e2a6018b86de6447b5643cbadf3275d5",
   "config": {
     "model": "gemini-3.6-flash",
     "name": "wholefile",
@@ -14,12 +14,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788499722.1660402,
+  "ended_at": 1788512865.98629,
   "model": "gemini-3.6-flash",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
   "seed": 0,
-  "started_at": 1788499674.2422762,
+  "started_at": 1788512818.574028,
   "temperature": 0
 }
