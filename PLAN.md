@@ -258,6 +258,50 @@ Written to `docs/results/` as generated markdown tables.
 per-repo table, run k=3 seeds on the dev split to show variance, and state the model
 version and date. "48% with a good failure analysis" beats "90%" nobody believes.
 
+### Current measured results (2026-09-04)
+
+`docs/results/main.md` — the cross-arm bootstrap-CI table D65's `write_main_report`
+produces — now has real numbers behind it for the first time: all 7 arms (`embedding`,
+`graph`, `wholefile`, `t1_only`, `no_t1`, `no_triage`, `model_groq`) scored against the
+same 7-repo dev-split corpus slice, each genuinely re-attempted this date (stale resume
+caches cleared first, not replayed).
+
+**Headline: 0/7 repos reached `full_green` on any arm this round.** Every arm lands at
+the identical 0.266 mean pass rate — T1's mechanical rewrites are doing all the currently
+visible work; no retrieval strategy, tier combination, triage setting, or model swap has
+yet flipped a single currently-failing test to passing on this corpus slice. This is an
+honest, not a manufactured, flat result (D65's own reasoning: report the interval, don't
+hide it) — see §1's own thesis that the number matters more than the story.
+
+Real signal did come through despite the flat headline:
+- `graph` got genuine T2/T3 repair attempts past Gemini's quota wall this time: real
+  cost ($0.04 mean/repo), a consistently unparseable-patch failure mode on
+  `iscc__iscc-core` (`corrupt patch at line 392`, twice, not a one-off), and two
+  mechanically-accepted repairs that didn't change `pass_rate`.
+- `model_groq` reproduces that same "repair applies cleanly, doesn't fix the test"
+  pattern independently, on a different provider — the same two repos, the same zero
+  effect, on both this run and the original one.
+- `wholefile`/`no_t1`/`no_triage` are still substantially quota-blocked (Gemini's
+  free-tier 429 wall, D48) — genuinely re-attempted, not left stale, but the daily quota
+  window hasn't stayed open long enough to get a real T2/T3 measurement through for most
+  of them.
+
+**What this means for the plan:** §1's "an ablation" deliverable doesn't exist yet in a
+meaningful form — graph-vs-embedding-vs-wholefile can't be honestly compared on evidence
+this thin and this quota-starved. §10's resume bullet stays a placeholder; there's no
+positive result yet to replace it with honestly. The real blocker right now isn't the
+architecture, it's Gemini's free-tier quota — worth a deliberate decision on paying for
+quota, switching the primary model, or accepting a much smaller N of real T2/T3 attempts
+as the ceiling. Separately: `main.md` technically now satisfies "real measured numbers,"
+the CLAUDE.md condition that unlocks Phases 6+ — but the result itself is degenerate
+(0/7 full green, still quota-limited), so treat that gate as not meaningfully cleared
+yet, not as a green light to start Phase 6.
+
+Full per-repo tables and CIs: `docs/results/main.md`. Per-arm caveats and live-run
+narrative: `docs/results/*.md`. The `embedding` arm's crash under `max_workers>1`
+(concurrent `SentenceTransformer` construction with no lock) was found and fixed this
+session — see D67 in `docs/decisions.md`.
+
 ---
 
 ## 8. Risk register
