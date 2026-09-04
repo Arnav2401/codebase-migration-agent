@@ -40,6 +40,7 @@ from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.graph import build_migration_graph
 from pmigrate.agent.model_client import ModelClient
 from pmigrate.agent.retrieval import (
+    Embedder,
     EmbeddingRetrieval,
     GraphRetrieval,
     Retrieval,
@@ -181,21 +182,30 @@ def compute_diff_similarity(
     return repo_diff_similarity(file_tuples)
 
 
-def _build_retrieval(config: EvalConfig, repo_id: str) -> Retrieval:
+def _build_retrieval(
+    config: EvalConfig, repo_id: str, *, embedder: Embedder | None = None
+) -> Retrieval:
     """docs/decisions.md D60/D61: constructs the `Retrieval` strategy `config.retrieval`
     actually names. `EvalConfig.__post_init__` already rejects any kind besides the three
     implemented ones at construction time, so the fallback branch here is unreachable in
     practice -- kept as an explicit `ValueError` rather than silently defaulting, so a
     future retrieval kind added to `EvalConfig` without a matching case here fails loudly
-    instead of quietly running the wrong strategy. Constructing `SentenceTransformerEmbedder`
-    is cheap (no model load) -- it's lazy, inside `embed()` -- so this never pays that cost
-    for a run that doesn't actually pick the "embedding" arm."""
+    instead of quietly running the wrong strategy.
+
+    `embedder`, when given, is reused as-is instead of constructing a fresh
+    `SentenceTransformerEmbedder` (docs/decisions.md D67) -- `run_corpus` builds exactly
+    ONE shared instance per run and passes it down here for every repo, so `max_workers>1`
+    never races multiple `SentenceTransformer(...)` constructions against each other
+    (D67's crash). `embedder=None` (every direct caller/test that isn't `run_corpus`)
+    falls back to constructing a fresh one -- cheap, since it's lazy, inside `embed()`,
+    not at module load time; only actually constructing and calling this specific class
+    pays that cost."""
     if config.retrieval == "graph":
         return GraphRetrieval(repo_id=repo_id)
     if config.retrieval == "wholefile":
         return WholefileRetrieval()
     if config.retrieval == "embedding":
-        return EmbeddingRetrieval(embedder=SentenceTransformerEmbedder())
+        return EmbeddingRetrieval(embedder=embedder or SentenceTransformerEmbedder())
     raise ValueError(f"no Retrieval implementation wired up for retrieval={config.retrieval!r}")
 
 
@@ -211,6 +221,7 @@ def run_repo(
     policy: SandboxPolicy | None = None,
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
+    embedder: Embedder | None = None,
 ) -> RepoResult:
     """Runs the full migration loop against one already-checked-out repo and scores the
     result. `image` is built by the caller (`sandbox.build(repo, "v2")` — the SAME image
@@ -225,7 +236,9 @@ def run_repo(
     `build_migration_graph`'s own build-vs-run split. `budget` defaults to
     `BudgetState(usd_cap=config.usd_cap_per_repo)` if not given — pass one explicitly for
     anything besides `config`'s own cap (e.g. a tighter `max_iterations` or
-    `wallclock_cap_s` for a specific run)."""
+    `wallclock_cap_s` for a specific run). `embedder` (docs/decisions.md D67) is passed
+    straight through to `_build_retrieval` — `None` unless the caller is `run_corpus`
+    sharing one instance across every repo in a `config.retrieval == "embedding"` run."""
     if repo.baseline is None:
         raise ValueError(f"{repo.repo_id} has no captured baseline (I4) — run capture-baselines")
     if "T2" not in config.tiers and model_client is not None:
@@ -248,7 +261,7 @@ def run_repo(
         policy=policy or SandboxPolicy(),
         model_client=model_client,
         use_triage=config.triage,
-        retrieval=_build_retrieval(config, repo.repo_id),
+        retrieval=_build_retrieval(config, repo.repo_id, embedder=embedder),
         enable_t1="T1" in config.tiers,
     )
 
@@ -315,12 +328,17 @@ def _run_one_repo(
     failures_out: Path | None,
     resume: ResumeContext | None,
     budget_tracker: _GlobalBudgetTracker | None,
+    embedder: Embedder | None,
 ) -> RepoResult | None:
     """One repo's worth of `run_corpus`'s loop body — factored out so both the sequential
     path (`max_workers=1`, identical control flow to before docs/decisions.md D66) and the
     `ThreadPoolExecutor` path call the exact same logic. Returns `None` for every "skip
     this repo" case (no baseline, wrong split, global budget exhausted, or a real failure)
-    so both callers share one "only keep non-None results" rule."""
+    so both callers share one "only keep non-None results" rule. `embedder` (docs/decisions.md
+    D67) is `run_corpus`'s one shared `SentenceTransformerEmbedder` instance when
+    `config.retrieval == "embedding"`, threaded straight through to `run_repo` — never
+    constructed here, so every worker thread reuses the same instance instead of racing
+    to build its own."""
     if repo.baseline is None:
         log.info("harness.skip_no_baseline", repo_id=repo.repo_id)
         return None
@@ -371,6 +389,7 @@ def _run_one_repo(
             policy=policy,
             budget=repo_budget,
             failures_out=failures_out,
+            embedder=embedder,
         )
     except Exception as e:
         log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
@@ -425,11 +444,23 @@ def run_corpus(
     release the GIL while waiting), matching phase-5-eval.md's "parallel over Docker with
     a concurrency cap that matches your machine." `total_usd_cap`, if given, stops
     STARTING new repos once the running total already spent meets or exceeds it — see
-    `_GlobalBudgetTracker`'s own docstring for why an in-flight repo isn't cut off."""
+    `_GlobalBudgetTracker`'s own docstring for why an in-flight repo isn't cut off.
+
+    `embedder` (docs/decisions.md D67): built ONCE here, before either dispatch path, and
+    passed to every `_run_one_repo`/`run_repo` call for the whole corpus — `None` unless
+    `config.retrieval == "embedding"`, in which case one shared `SentenceTransformerEmbedder`
+    replaces the old one-per-repo construction that crashed the process outright under
+    `max_workers>1` (concurrent `SentenceTransformer(...)` construction, see D67). The
+    instance itself is cheap to construct (no model load yet — that's still lazy, inside
+    `embed()`); its own internal lock (`retrieval.py`) is what makes sharing it across
+    `ThreadPoolExecutor` worker threads safe."""
     if max_workers < 1:
         raise ValueError(f"max_workers must be >= 1, got {max_workers}")
 
     budget_tracker = _GlobalBudgetTracker(total_usd_cap) if total_usd_cap is not None else None
+    embedder: Embedder | None = (
+        SentenceTransformerEmbedder() if config.retrieval == "embedding" else None
+    )
 
     if max_workers == 1:
         results = []
@@ -446,6 +477,7 @@ def run_corpus(
                 failures_out=failures_out,
                 resume=resume,
                 budget_tracker=budget_tracker,
+                embedder=embedder,
             )
             if result is not None:
                 results.append(result)
@@ -467,6 +499,7 @@ def run_corpus(
                 failures_out=failures_out,
                 resume=resume,
                 budget_tracker=budget_tracker,
+                embedder=embedder,
             )
             for repo in specs
         ]

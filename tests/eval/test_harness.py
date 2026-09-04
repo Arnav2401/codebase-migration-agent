@@ -1,8 +1,11 @@
 import json
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+import pytest
 
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
 from pmigrate.agent.retrieval import GraphRetrieval, WholefileRetrieval
@@ -482,6 +485,50 @@ def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
     # close to one delay_s plus git/scoring overhead. A generous bound (well under 2x one
     # delay) avoids flakiness while still failing hard if this silently ran sequentially.
     assert elapsed < delay_s * 2
+
+
+def test_run_corpus_shares_one_embedder_instance_across_concurrent_repos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/decisions.md D67: before the fix, `_build_retrieval` constructed a fresh
+    `SentenceTransformerEmbedder()` inside EVERY repo's own `run_repo` call -- under
+    `run_corpus`'s `ThreadPoolExecutor` (D66), that meant one `SentenceTransformer(...)`
+    construction PER WORKER THREAD, racing each other (the live crash D67 documents:
+    `docs/results/embedding.md`'s caveat 2). `run_corpus` now builds exactly one embedder
+    before dispatching any repo and threads it through
+    `_run_one_repo`/`run_repo`/`_build_retrieval` -- this proves that sharing holds under
+    REAL concurrency (`_SlowFakeSandbox`, same proof pattern as
+    `test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially` above), not
+    just when repos happen to run one at a time."""
+    construct_count = 0
+    count_lock = threading.Lock()
+
+    class CountingEmbedder:
+        def __init__(self) -> None:
+            nonlocal construct_count
+            with count_lock:
+                construct_count += 1
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] for _ in texts]
+
+    monkeypatch.setattr("pmigrate.eval.harness.SentenceTransformerEmbedder", CountingEmbedder)
+
+    n_repos = 4
+    repos = [_clonable_repo_spec(tmp_path, f"repo{i}") for i in range(n_repos)]
+    config = EvalConfig(name="test", model="fake", retrieval="embedding")
+
+    results = run_corpus(
+        repos,
+        work_root=tmp_path / "work",
+        sandbox=_SlowFakeSandbox(delay_s=0.3, response=_passed_run()),
+        model_client=None,
+        config=config,
+        max_workers=n_repos,
+    )
+
+    assert len(results) == n_repos
+    assert construct_count == 1
 
 
 def test_run_corpus_rejects_a_sub_one_max_workers(tmp_path: Path) -> None:

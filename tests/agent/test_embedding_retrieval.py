@@ -1,7 +1,18 @@
+import sys
+import threading
+import time
+import types
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pmigrate.agent.retrieval import EmbeddingRetrieval, _cosine_similarity
+import pytest
+
+from pmigrate.agent.retrieval import (
+    EmbeddingRetrieval,
+    SentenceTransformerEmbedder,
+    _cosine_similarity,
+)
 
 
 @dataclass
@@ -104,3 +115,60 @@ def test_embedding_retrieval_returns_empty_when_no_other_symbols_exist(tmp_path:
 
     assert related == ()
     assert embedder.calls == []  # never even called the embedder with nothing to embed
+
+
+class _FakeEncoded:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    def tolist(self) -> list[list[float]]:
+        return [[0.0] for _ in range(self._n)]
+
+
+def test_sentence_transformer_embedder_serializes_concurrent_embed_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/decisions.md D67: the real live-run crash (`eval/harness.py`'s `run_corpus`
+    under `max_workers>1`) was multiple worker threads racing to construct
+    `SentenceTransformer(...)` concurrently -- each on its OWN `SentenceTransformerEmbedder`
+    instance, since `_build_retrieval` built a fresh one per repo. This test exercises the
+    REAL fixed `SentenceTransformerEmbedder.embed()` (not a reimplementation) against a
+    fake `sentence_transformers` module standing in for the real one (heavy, needs network
+    on first use -- CLAUDE.md's "no network in unit tests" rule), and proves its `_lock`
+    actually serializes concurrent `.embed()` calls on ONE shared instance: without the
+    lock, two threads could both observe `constructing=False` before either sets it, so
+    `overlap_detected` would go `True` and `construct_count` would exceed 1 -- exactly the
+    race the live crash needed."""
+    overlap_detected = False
+    constructing = False
+    construct_count = 0
+    state_lock = threading.Lock()
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name: str) -> None:
+            nonlocal overlap_detected, constructing, construct_count
+            with state_lock:
+                if constructing:
+                    overlap_detected = True
+                constructing = True
+                construct_count += 1
+            time.sleep(0.05)  # widen the race window a lock-less version would fall into
+            with state_lock:
+                constructing = False
+
+        def encode(self, texts: list[str]) -> _FakeEncoded:
+            return _FakeEncoded(len(texts))
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    embedder = SentenceTransformerEmbedder()
+    n_threads = 8
+    with ThreadPoolExecutor(max_workers=n_threads) as executor:
+        futures = [executor.submit(embedder.embed, ["x"]) for _ in range(n_threads)]
+        for future in futures:
+            future.result()
+
+    assert construct_count == 1
+    assert overlap_detected is False

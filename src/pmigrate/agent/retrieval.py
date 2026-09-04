@@ -11,6 +11,7 @@ test keeps working unchanged.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -144,23 +145,38 @@ class SentenceTransformerEmbedder:
     (`pyproject.toml`'s `embedding` extra, `pip install -e .[embedding]`) -- most of this
     project (T1, triage, the other two retrieval arms) has no reason to force a
     multi-hundred-MB install, so the import is lazy, inside `embed()`, not at module load
-    time; only actually constructing and calling this specific class pays that cost."""
+    time; only actually constructing and calling this specific class pays that cost.
+
+    docs/decisions.md D67: `_lock` serializes the ENTIRE body of `embed()` -- both the
+    lazy `SentenceTransformer(...)` construction and the `.encode()` call -- so one shared
+    instance (`eval/harness.py`'s `run_corpus` now builds exactly one and threads it
+    through every repo, instead of one-per-repo) is safe to call from multiple
+    `ThreadPoolExecutor` worker threads at once (docs/decisions.md D66). Without this,
+    concurrent `SentenceTransformer(...)` construction crashed the process outright (see
+    D67); a per-instance lock, not a module-level one, since nothing here requires
+    serializing calls across two DIFFERENT `SentenceTransformerEmbedder` instances (tests
+    construct several independent ones, e.g. one per test, and must not block on each
+    other)."""
 
     model_name: str = "all-MiniLM-L6-v2"
-    _model: object | None = field(default=None, init=False, repr=False)
+    _model: object | None = field(default=None, init=False, repr=False, compare=False)
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        if self._model is None:
-            try:
-                import sentence_transformers  # type: ignore[import-not-found]
-            except ImportError as exc:
-                raise ImportError(
-                    "sentence-transformers is not installed -- run "
-                    "`pip install -e '.[embedding]'` to use EmbeddingRetrieval"
-                ) from exc
-            self._model = sentence_transformers.SentenceTransformer(self.model_name)
-        embeddings: list[list[float]] = self._model.encode(texts).tolist()  # type: ignore[attr-defined]
-        return embeddings
+        with self._lock:
+            if self._model is None:
+                try:
+                    import sentence_transformers  # type: ignore[import-not-found]
+                except ImportError as exc:
+                    raise ImportError(
+                        "sentence-transformers is not installed -- run "
+                        "`pip install -e '.[embedding]'` to use EmbeddingRetrieval"
+                    ) from exc
+                self._model = sentence_transformers.SentenceTransformer(self.model_name)
+            embeddings: list[list[float]] = self._model.encode(texts).tolist()  # type: ignore[attr-defined]
+            return embeddings
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

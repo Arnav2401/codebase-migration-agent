@@ -2918,6 +2918,97 @@ corrupted results file showed up during a real multi-hour run, was the actual wo
 
 ---
 
+## D67 — `embedding` retrieval under `max_workers>1`: one shared, lock-guarded embedder instance
+
+**Alternatives:** Eagerly constructing the real `SentenceTransformer(...)` model before the
+`ThreadPoolExecutor` starts, instead of leaving it lazy — rejected as unnecessary: the
+crash was concurrent CONSTRUCTION racing, and a per-instance lock inside `embed()` already
+makes lazy construction safe regardless of which thread calls it first, without
+special-casing `run_corpus`'s dispatch order or paying the model-load cost for a run that
+never picks `retrieval="embedding"`. A `multiprocessing`-based fix (one process per repo,
+no shared native state to race) — rejected for the same reason D66 rejected multiprocessing
+generally: this problem is scoped to one class inside an otherwise-fine threading model,
+not a reason to abandon threads project-wide. A module-level (not per-instance) lock —
+rejected: it would also serialize two functionally-independent `SentenceTransformerEmbedder`
+instances (two separate test cases, or a future caller with two different `model_name`s)
+against each other for no reason; a `dataclass`-attached lock scopes contention to
+instances that actually share state.
+
+**Why:** `docs/results/embedding.md`'s own caveat 2, from a real live run:
+`make eval CONFIG=embedding SPLIT=dev --max-workers 4` died silently mid-run twice — the
+log stopped right after `SentenceTransformer` weight-loading output with zero repos
+scored, no `harness.repo_failed` log line, no exception; `ps aux` confirmed the process
+itself was gone, not hung. Root cause: `eval/harness.py`'s `_build_retrieval` constructed a
+FRESH `SentenceTransformerEmbedder()` per repo, and `SentenceTransformerEmbedder.embed()`
+lazily constructs its own `sentence_transformers.SentenceTransformer(...)` on first call —
+under `run_corpus`'s `ThreadPoolExecutor` (D66), several worker threads called `.embed()`
+for the first time at nearly the same moment, so several threads called
+`SentenceTransformer(...)` concurrently. That's a native-extension construction (a PyTorch
+model load, HuggingFace cache file reads) with no thread-safety guarantee — a silent
+process crash is exactly what an unsynchronized native race looks like from the outside.
+
+**Fixed by** two changes together, neither sufficient alone: (1) `agent/retrieval.py`'s
+`SentenceTransformerEmbedder` gained a per-instance `threading.Lock` guarding the ENTIRE
+body of `embed()` — both the lazy `SentenceTransformer(...)` construction and every
+`.encode()` call, since HuggingFace's fast tokenizers have their own known thread-safety
+issues when one tokenizer is driven from multiple Python threads, not only at construction
+time. (2) `eval/harness.py`'s `run_corpus` now builds exactly ONE
+`SentenceTransformerEmbedder` — before dispatching to either the sequential or
+`ThreadPoolExecutor` path — when `config.retrieval == "embedding"`, and threads it through
+`_run_one_repo` → `run_repo` → `_build_retrieval` (each gained an `embedder: Embedder |
+None` parameter) instead of every repo building its own. Together: at most one
+`SentenceTransformer` is ever constructed per run, and the lock means any caller that
+doesn't pre-share an instance (a direct `run_repo` call, every pre-existing test) stays
+safe even if it later is called concurrently.
+
+**Verified by pytest AND re-run live:** two regression tests exercise real thread
+concurrency (not just accepted-and-ignored parameters), matching D66's own "prove it's
+real, not sequential" bar — and both were confirmed to actually catch the bug by reverting
+the fix and watching them fail, not just written and trusted.
+`tests/agent/test_embedding_retrieval.py::test_sentence_transformer_embedder_serializes_concurrent_embed_calls`
+drives 8 threads calling `.embed()` on ONE shared `SentenceTransformerEmbedder`, against a
+fake `sentence_transformers` module whose fake `SentenceTransformer.__init__` detects
+concurrent entry and sleeps to widen the race window — reverting the lock makes it fail
+loudly (`construct_count == 8`, `overlap_detected is True`).
+`tests/eval/test_harness.py::test_run_corpus_shares_one_embedder_instance_across_concurrent_repos`
+runs 4 repos through `run_corpus(max_workers=4)` under `_SlowFakeSandbox` (forces genuine
+overlap, the same proof pattern as D66's own concurrency-timing test) with a counting fake
+standing in for `SentenceTransformerEmbedder`, and asserts exactly one construction total —
+reverting `_build_retrieval`'s sharing (each repo builds its own again) makes it fail (5
+constructions: the one `run_corpus` builds and discards, plus one per repo).
+
+Also re-run live, 2026-09-04: `make eval CONFIG=embedding SPLIT=dev --max-workers 4` — the
+actual repro from `docs/results/embedding.md`'s caveat 2, this time with `sentence-transformers`
+genuinely installed (the first attempt at this re-run hit every repo's retrieval call
+raising `ImportError: sentence-transformers is not installed`, cleanly caught by
+`harness.repo_failed` and NOT a crash — already mildly reassuring, but not the real repro
+since it never reached `SentenceTransformer(...)` construction at all). With the extra
+installed: all 7 repos scored, exit code 0, no `harness.repo_failed`, no hang. The log
+shows the `Loading weights` progress bar exactly ONCE for the entire run, even though four
+repos' repair() calls (and therefore `EmbeddingRetrieval.related_files` → `.embed()`) fired
+within the same ~3-second window — direct confirmation the shared, lock-guarded embedder
+loaded the real model once and reused it, instead of racing one `SentenceTransformer(...)`
+construction per worker thread the way the original crash did. Per-repo pass rates differ
+slightly from the recorded `--max-workers 1` table (live Gemini 429 quota state at
+run-time, covered by that doc's own caveat 1) — not a correctness regression, and not
+promoted to a new canonical results table for that reason.
+
+**Interview:** "The crash didn't look like a bug at first glance — the process just
+vanished mid-run with no exception, which is what native-code races look like, not what
+Python-level bugs look like. The fix needs both parts because the shared-instance part
+alone isn't sufficient on its own: nothing stops a future caller from handing that one
+shared instance to two threads at once again, so the lock inside `embed()` is the actual
+safety property — the shared instance in `run_corpus` is what makes acquiring the model,
+rather than fighting over the lock, cheap, since only one `SentenceTransformer` ever loads
+per run instead of one per repo. I drove the regression tests through a fake
+`sentence_transformers` module rather than skipping the test (the real one needs a
+network download on first use — CLAUDE.md's 'no network in unit tests' rule) but
+deliberately exercised the REAL `SentenceTransformerEmbedder.embed()` code path, not a
+hand-rolled stand-in, and confirmed by reverting the fix that both tests actually fail — a
+regression test that can't fail isn't proof of anything."
+
+---
+
 ## Template
 
 ```
