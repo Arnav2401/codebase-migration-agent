@@ -1,22 +1,19 @@
 # Eval results — `no_triage`
 
-> **Re-run 2026-09-04 — genuinely re-attempted (stale cache cleared first), same quota
-> wall, but reproduces the same real distinct behavior as before.** 6 of 7 repos hit
-> Gemini's 429 quota wall on repair immediately (`Aiven-Open__rohmu`,
-> `SupImDos__pydantic-argparse`, `iscc__iscc-core`, `madkote__fastapi-plugins`,
-> `cmudig__draco2`, `okfn__opendataeditor`). `eyurtsev__kor` is again the exception with
-> the same genuinely different code path: `triage=False` disables D37's "skip repair
-> entirely on an all-preexisting diagnosis" check, so repair was actually ATTEMPTED here
-> (`iterations=2`, same as the original run) rather than skipped outright — and it again
-> produced `agent.repair_no_target` (no findable target file), not a quota casualty, the
-> exact same outcome as the original run. Confirms the original finding wasn't a fluke:
-> the `use_triage=False` fallback path is reliably live and reliably hits the same
-> no-target wall on this repo, independent of quota state. Every number below is
-> byte-identical to the original run, and otherwise the same T1-only-shaped result as
-> `graph`/`wholefile`/`t1_only`/`no_t1`.
+> **Re-run 2026-09-04 (third attempt) — genuinely re-attempted (stale cache cleared
+> first), same quota wall, same real finding reproduces a third time.** 6 of 7 repos hit
+> Gemini's 429 wall immediately. `eyurtsev__kor` again gets the distinct `triage=False`
+> code path: D37's all-preexisting skip is disabled, repair genuinely fires
+> (`iterations=2`) and hits `agent.repair_no_target` — identical outcome to both prior
+> runs. Three consecutive independent runs producing the exact same
+> `repair_no_target` result removes any doubt this is a reliable behavior of the
+> `use_triage=False` path on this specific repo, not noise. Numbers otherwise
+> byte-identical to every prior attempt and to `wholefile`/`no_t1`'s own re-runs today
+> (see their notes) — this arm shares the same "hasn't landed inside the quota window"
+> problem.
 
 **7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (quota-blocked again
-except eyurtsev__kor's confirmed no-target attempt, see caveat above)
+except eyurtsev__kor's third confirmed no-target attempt, see caveat above)
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
