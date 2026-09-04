@@ -1,20 +1,20 @@
 # Eval results — `graph`
 
-> **Re-run 2026-09-04 (third attempt) — genuinely re-attempted (stale cache cleared
-> first), but quota-blocked this time, unlike the second attempt.** Every repo needing
-> repair hit an immediate 429; `eyurtsev__kor` is unaffected either way (repair correctly
-> skipped, D37). This is the opposite outcome from this arm's own prior re-run (see git
-> history on this file / docs/decisions.md), which DID get real Gemini responses through
-> — real repair attempts, real cost ($0.30), a consistently unparseable-patch failure
-> mode on `iscc__iscc-core`, two mechanically-accepted repairs that didn't change
-> `pass_rate`. That real result isn't invalidated by this attempt; it just shows this
-> arm's outcome depends on which side of Gemini's free-tier daily quota window a given
-> run happens to land on, run to run, even for the SAME arm. Numbers below are the
-> degenerate T1-only shape, byte-identical to `t1_only`/every quota-blocked arm this
-> round — not a regression, just quota timing this attempt.
+> **Re-run 2026-09-04 (fourth attempt) — quota-blocked again, same pattern as the third
+> attempt.** Every repo needing repair hit an immediate 429; `eyurtsev__kor` is
+> unaffected either way (D37). This arm's outcome across four attempts now shows a clear
+> split: one attempt (the second) got real Gemini responses through — real repair
+> attempts, $0.30 cost, a consistently unparseable-patch failure mode on
+> `iscc__iscc-core`, two mechanically-accepted repairs that didn't change `pass_rate` —
+> and three attempts (first, third, fourth) hit the 429 wall immediately. That's not a
+> flaky arm; it's a direct readout of Gemini's free-tier quota window being narrow and
+> largely closed relative to how often this session has been hitting it. The one real
+> result stands on its own merits regardless of how the quota lottery goes on any given
+> re-attempt. Numbers below are the degenerate T1-only shape, byte-identical to
+> `t1_only`/every quota-blocked arm.
 
 **7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (quota-blocked this
-attempt — see caveat above; a prior attempt got real signal through)
+attempt, 3 of 4 total attempts have been — see caveat above)
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
