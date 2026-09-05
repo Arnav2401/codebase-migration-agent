@@ -17,8 +17,15 @@ providers that don't exist here yet would be speculative, not implemented. Exten
 `run_corpus`'s own params of the same name — see that function's docstring for what each
 actually does (and doesn't: `total_usd_cap` stops STARTING new repos, not in-flight ones).
 
+`--clone-cache-root` (docs/decisions.md D70) also passes straight through to
+`run_corpus`/`checkout_pre_sha` — defaults to the same `clone_cache/` path
+`harness.py`'s `DEFAULT_CLONE_CACHE_ROOT` uses, kept independent of `--work-root` on
+purpose so a caller pointing `work_root` at a fresh/scratch location per run doesn't
+also silently throw away the one thing that's expensive to rebuild.
+
 Not unit-tested against real Docker/network (matches `eval/harness.py`'s own
-`checkout_pre_sha`/`run_corpus` carve-out) — `main`'s own orchestration is exercised by a
+`run_corpus` carve-out — `checkout_pre_sha` itself IS unit-tested, against a real local
+git repo, see that module's docstring) — `main`'s own orchestration is exercised by a
 live `make eval` run, not pytest. `_build_model_client` and the JSON config loading ARE
 pure enough to unit test directly.
 """
@@ -38,7 +45,7 @@ from dotenv import load_dotenv
 from pmigrate.agent.model_client import GeminiModelClient, GroqModelClient, ModelClient
 from pmigrate.corpus.manifest_io import load_manifest
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.harness import run_corpus
+from pmigrate.eval.harness import DEFAULT_CLONE_CACHE_ROOT, run_corpus
 from pmigrate.eval.manifest import (
     RunManifest,
     agent_git_sha,
@@ -92,6 +99,7 @@ def main(
     out_dir: Path = Path("docs/results"),
     max_workers: int = 1,
     total_usd_cap: float | None = None,
+    clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
 ) -> None:
     if split not in ("dev", "test"):
         raise typer.BadParameter(f"split must be 'dev' or 'test', got {split!r}")
@@ -142,6 +150,7 @@ def main(
             resume=ResumeContext(store=store, corpus_sha=c_sha),
             max_workers=max_workers,
             total_usd_cap=total_usd_cap,
+            clone_cache_root=clone_cache_root,
         )
     finally:
         store.close()

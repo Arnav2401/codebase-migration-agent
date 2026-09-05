@@ -17,9 +17,27 @@ exact prior sequential control flow, so every existing caller is unaffected.
 Split for testability (CLAUDE.md: no network in unit tests): `run_repo` takes an
 ALREADY-checked-out `source_root` and a pre-built `image`, so it can be exercised with
 `FakeSandbox`/`FakeModelClient` exactly like `tests/agent/test_graph.py` does. Only
-`checkout_pre_sha` and `run_corpus`'s orchestration loop touch git/Docker for real —
-exercised by a live corpus run, not pytest (the same split `capture_baselines.py`'s own
-tests already draw around real Docker calls).
+`run_corpus`'s Docker-build orchestration is exercised by a live corpus run, not pytest
+(the same split `capture_baselines.py`'s own tests already draw around real Docker
+calls). `checkout_pre_sha` itself IS unit-tested against a real local git repo though —
+see `tests/eval/test_harness.py`'s `_make_clonable_repo`/`_run_git` helpers; cloning a
+local path is disk+subprocess only, no real network, matching this project's established
+pattern for exercising git-touching code without violating "no network in unit tests."
+
+`checkout_pre_sha`'s persistent clone cache (docs/decisions.md D70): real GitHub traffic
+during a full eval matrix run used to mean one fresh, full `git clone` PER repo PER run —
+`run_corpus` re-checks-out every repo on every arm, every re-run, so a single night's
+5-arm matrix could clone the same ~7 repos dozens of times over many hours, which is
+exactly what got a handful of them rate-limited/throttled into a hard 300s timeout
+(`docs/results/main.md`'s 2026-09-05 caveat). `checkout_pre_sha` now maintains one
+persistent `git clone --mirror` per `repo_id` under `clone_cache_root` (default
+`clone_cache/`, gitignored like `eval_work/`) that is NEVER deleted between runs —
+unlike `work_root`'s per-run `source`/`overlay` dirs, which `_run_one_repo` intentionally
+wipes every time (D45). Real network traffic now happens once per repo ever (the first
+mirror clone) plus one cheap `git fetch` per subsequent call; the actual working checkout
+`run_repo` operates on is still a fresh directory, but populated via a LOCAL clone from
+that cache (`git clone <cache_path> <dest>` — no network at all) followed by the same
+`git checkout <pre_sha>` as before.
 """
 
 from __future__ import annotations
@@ -64,6 +82,14 @@ log = structlog.get_logger()
 
 CLONE_TIMEOUT_S = 300
 CHECKOUT_TIMEOUT_S = 60
+FETCH_TIMEOUT_S = 60  # catching up an existing mirror is a small delta, not a full clone
+
+# Persists ACROSS eval runs, unlike work_root's per-run source/overlay dirs (D45) --
+# gitignored the same way eval_work/ is (see .gitignore). Kept independent of work_root
+# entirely (not a subdirectory of it) so pointing --work-root at a fresh/ephemeral
+# location never silently drops the one thing that's actually expensive to rebuild: the
+# real network transfer from GitHub.
+DEFAULT_CLONE_CACHE_ROOT = Path("clone_cache")
 
 # guards _dump_residual_failures's shared append-mode file (docs/decisions.md D66) --
 # run_corpus's parallel mode can have multiple repos' _run_one_repo calls writing to the
@@ -72,21 +98,83 @@ CHECKOUT_TIMEOUT_S = 60
 _failures_out_lock = threading.Lock()
 
 
-def checkout_pre_sha(repo: RepoSpec, dest: Path) -> None:
-    """Real network I/O — not unit-tested (see module docstring). `run_repo` takes the
-    already-checked-out result so it stays testable without git.
+def _populate_or_refresh_cache(repo: RepoSpec, clone_cache_root: Path) -> Path:
+    """The one place real GitHub network traffic happens (docs/decisions.md D70). Returns
+    the path to a persistent `git clone --mirror` of `repo.url`, keyed by `repo.repo_id` --
+    created via one real remote clone the first time this repo_id is ever seen, refreshed
+    via a cheap `git fetch` every time after.
+
+    A failed fetch (origin unreachable, still rate-limited, a transient network blip) is
+    logged and swallowed rather than raised: `pre_sha` is a FIXED historical commit that,
+    once the initial mirror clone has run once, is already permanently present in the
+    cache -- a fetch's only job is picking up commits newer than that, which this harness
+    never needs (both `pre_sha` and `post_sha` are pinned shas from the manifest, not
+    branch tips). Failing the whole checkout because a courtesy refresh didn't land would
+    reintroduce exactly the fragility this cache exists to remove. The FIRST clone for a
+    repo_id is not given the same grace -- if that fails, there is no cache yet to fall
+    back to, so it must raise (unlike the fetch branch, this re-raises via check=True) --
+    but the half-created `cache_path` a killed/timed-out `--mirror` leaves behind (bare
+    skeleton dirs, no real object data) IS cleaned up first: found live, verifying this
+    fix (docs/decisions.md D70) -- `Aiven-Open__rohmu`'s real first mirror clone hit the
+    exact same 300s GitHub throttle the original incident did, and without this cleanup a
+    killed clone's leftover `cache_path` would satisfy `cache_path.exists()` forever
+    after, permanently wrongly read as "already cached" (skipping straight to a `fetch`
+    against a repo with no history to fetch INTO meaningfully, then a local clone that
+    can't find `pre_sha`) until a human noticed and deleted it by hand."""
+    cache_path = clone_cache_root / repo.repo_id
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                ["git", "clone", "--mirror", "--quiet", repo.url, str(cache_path)],
+                check=True,
+                capture_output=True,
+                timeout=CLONE_TIMEOUT_S,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            shutil.rmtree(cache_path, ignore_errors=True)
+            raise
+        log.info("harness.clone_cache_populated", repo_id=repo.repo_id)
+    else:
+        try:
+            subprocess.run(
+                ["git", "-C", str(cache_path), "fetch", "--quiet"],
+                check=True,
+                capture_output=True,
+                timeout=FETCH_TIMEOUT_S,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            log.warning(
+                "harness.clone_cache_fetch_failed",
+                repo_id=repo.repo_id,
+                error=str(e),
+            )
+    return cache_path
+
+
+def checkout_pre_sha(
+    repo: RepoSpec, dest: Path, *, clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT
+) -> None:
+    """Real network I/O only on a repo_id's first-ever call (see module docstring and
+    `_populate_or_refresh_cache`) — not unit-tested against a real remote, though IS
+    unit-tested against a real local git repo (`tests/eval/test_harness.py`'s
+    `_make_clonable_repo`). `run_repo` takes the already-checked-out result so it stays
+    testable without git at all.
 
     Removes `dest` first if it already exists — matching `corpus/validate.py`'s
     `_clone_shallow` — so re-running the harness against the same `work_root` (a repeat
     corpus run, an interrupted earlier attempt) doesn't fail `git clone` with "destination
-    path already exists and is not an empty directory."""
+    path already exists and is not an empty directory." The clone that populates `dest` is
+    now always a LOCAL clone from `clone_cache_root`'s cached mirror, never a fresh remote
+    clone — real network I/O is confined to `_populate_or_refresh_cache`."""
+    cache_path = _populate_or_refresh_cache(repo, clone_cache_root)
     if dest.exists():
         shutil.rmtree(dest)
     subprocess.run(
-        ["git", "clone", "--quiet", repo.url, str(dest)],
+        ["git", "clone", "--quiet", str(cache_path), str(dest)],
         check=True,
         capture_output=True,
-        timeout=CLONE_TIMEOUT_S,
+        timeout=CHECKOUT_TIMEOUT_S,
     )
     subprocess.run(
         ["git", "-C", str(dest), "checkout", "--quiet", repo.pre_sha],
@@ -329,6 +417,7 @@ def _run_one_repo(
     resume: ResumeContext | None,
     budget_tracker: _GlobalBudgetTracker | None,
     embedder: Embedder | None,
+    clone_cache_root: Path,
 ) -> RepoResult | None:
     """One repo's worth of `run_corpus`'s loop body — factored out so both the sequential
     path (`max_workers=1`, identical control flow to before docs/decisions.md D66) and the
@@ -338,7 +427,9 @@ def _run_one_repo(
     D67) is `run_corpus`'s one shared `SentenceTransformerEmbedder` instance when
     `config.retrieval == "embedding"`, threaded straight through to `run_repo` — never
     constructed here, so every worker thread reuses the same instance instead of racing
-    to build its own."""
+    to build its own. `clone_cache_root` (docs/decisions.md D70) is threaded straight
+    through to `checkout_pre_sha` — every repo in one `run_corpus` call shares the same
+    persistent cache root, keyed internally by `repo.repo_id`."""
     if repo.baseline is None:
         log.info("harness.skip_no_baseline", repo_id=repo.repo_id)
         return None
@@ -372,7 +463,7 @@ def _run_one_repo(
     overlay_root.mkdir(parents=True)
 
     try:
-        checkout_pre_sha(repo, source_root)
+        checkout_pre_sha(repo, source_root, clone_cache_root=clone_cache_root)
         image = sandbox.build(repo, "v2")
         # a fresh started_at per repo — reusing one BudgetState instance across every
         # repo in the loop would make wallclock_cap_s count from the FIRST repo's
@@ -426,10 +517,18 @@ def run_corpus(
     resume: ResumeContext | None = None,
     max_workers: int = 1,
     total_usd_cap: float | None = None,
+    clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
 ) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
     stance on a single bad repo.
+
+    `clone_cache_root` (docs/decisions.md D70): passed straight through to every repo's
+    `checkout_pre_sha` call. Defaults to a fixed relative path (`clone_cache/`) rather than
+    something derived from `work_root` — the whole point is that it survives even a
+    caller pointing `work_root` at a fresh/ephemeral location per run; tests should always
+    pass an explicit `tmp_path`-scoped value to avoid writing into the real project-level
+    cache.
 
     `resume` (docs/decisions.md D63): when set, a `(repo_id, config_hash, corpus_sha)`
     cell already in `resume.store` is loaded and returned WITHOUT re-checkout/build/run —
@@ -478,6 +577,7 @@ def run_corpus(
                 resume=resume,
                 budget_tracker=budget_tracker,
                 embedder=embedder,
+                clone_cache_root=clone_cache_root,
             )
             if result is not None:
                 results.append(result)
@@ -500,6 +600,7 @@ def run_corpus(
                 resume=resume,
                 budget_tracker=budget_tracker,
                 embedder=embedder,
+                clone_cache_root=clone_cache_root,
             )
             for repo in specs
         ]

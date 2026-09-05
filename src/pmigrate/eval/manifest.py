@@ -53,8 +53,10 @@ def build_prompt_hashes(prompts_dir: Path) -> dict[str, str]:
 def agent_git_sha(repo_root: Path) -> str:
     """The agent codebase's own HEAD sha at run time -- "which version of the agent
     produced this run," not a corpus repo's sha (that's `RepoSpec.pre_sha`/`post_sha`).
-    Real subprocess call, not unit-tested against a fake (same real-I/O carve-out
-    `eval/harness.py`'s own module docstring already draws around `checkout_pre_sha`)."""
+    Real subprocess call against THIS repo's own local git history (always present, no
+    network needed), so it's simple enough not to need a fake -- unlike `eval/harness.py`'s
+    `checkout_pre_sha`, which touches a real remote and is unit-tested against a real
+    local git repo standing in for one (see that module's docstring)."""
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_root,

@@ -30,6 +30,13 @@ traces/
 eval_results.db
 eval_work/
 
+# persistent per-repo_id git mirror cache (docs/decisions.md D70) -- large,
+# machine-local, and rebuilt from corpus/manifest.json's own repo.url on first use.
+# Deliberately NOT deleted between runs (unlike eval_work/'s per-run source/overlay
+# dirs above) -- that persistence is the entire point, so it stays out of git the same
+# way, not something to ever commit.
+clone_cache/
+
 .DS_Store
 
 # Claude Code local session settings — personal, not project config

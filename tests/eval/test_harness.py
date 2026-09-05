@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import threading
 import time
@@ -10,7 +11,7 @@ import pytest
 from pmigrate.agent.model_client import FakeModelClient, ModelResponse
 from pmigrate.agent.retrieval import GraphRetrieval, WholefileRetrieval
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.harness import _build_retrieval, run_corpus, run_repo
+from pmigrate.eval.harness import _build_retrieval, checkout_pre_sha, run_corpus, run_repo
 from pmigrate.eval.store import ResultStore, ResumeContext, config_hash
 from pmigrate.types import (
     BaselineResult,
@@ -338,6 +339,104 @@ def _make_clonable_repo(
     return origin_dir, sha
 
 
+def test_checkout_pre_sha_populates_the_cache_and_the_working_dir_on_first_call(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D70: a repo_id never seen before must do one real (here: real
+    local-path, standing in for real-network) `git clone --mirror` into `clone_cache_root`,
+    and the actual working checkout must land in `dest` at the right content."""
+    origin_dir, pre_sha = _make_clonable_repo(tmp_path)
+    repo = replace(_repo(None), repo_id="acme__cache1", url=str(origin_dir), pre_sha=pre_sha)
+    dest = tmp_path / "dest"
+    cache_root = tmp_path / "clone_cache"
+
+    checkout_pre_sha(repo, dest, clone_cache_root=cache_root)
+
+    cache_path = cache_root / repo.repo_id
+    # `git clone --mirror` produces a bare repo -- HEAD sits directly under the cache
+    # dir, not nested under a `.git/` the way a normal working clone's would.
+    assert (cache_path / "HEAD").exists()
+    assert (dest / "app" / "models.py").read_text() == "x = m.dict()\n"
+
+
+def test_checkout_pre_sha_second_call_reuses_the_cache_even_if_origin_is_gone(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D70: proves reuse the same way this file's other tests prove a
+    resume-skip -- point the SECOND call at a url that can no longer be cloned at all. A
+    fresh remote clone attempt would raise; if this still succeeds, the local cache (not
+    a lucky re-clone) is what served the checkout, and a failed refresh fetch against a
+    dead origin must be swallowed, not fatal."""
+    origin_dir, pre_sha = _make_clonable_repo(tmp_path, name="origin2")
+    cache_root = tmp_path / "clone_cache"
+    repo = replace(_repo(None), repo_id="acme__cache2", url=str(origin_dir), pre_sha=pre_sha)
+
+    checkout_pre_sha(repo, tmp_path / "dest1", clone_cache_root=cache_root)
+
+    shutil.rmtree(origin_dir)  # origin now completely gone
+    dead_repo = replace(repo, url=str(origin_dir))
+
+    checkout_pre_sha(dead_repo, tmp_path / "dest2", clone_cache_root=cache_root)
+
+    assert (tmp_path / "dest2" / "app" / "models.py").read_text() == "x = m.dict()\n"
+
+
+def test_checkout_pre_sha_fetch_picks_up_a_new_commit_in_an_existing_cache(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D70: the OTHER half of the cache contract -- an existing cache
+    isn't just reused as-is forever, it's refreshed via `git fetch` on every call. Checks
+    out a commit that didn't exist yet when the cache was first populated; this only
+    succeeds if the second call's fetch actually pulled it in."""
+    origin_dir, pre_sha = _make_clonable_repo(tmp_path, name="origin3")
+    cache_root = tmp_path / "clone_cache"
+    repo = replace(_repo(None), repo_id="acme__cache3", url=str(origin_dir), pre_sha=pre_sha)
+
+    checkout_pre_sha(repo, tmp_path / "dest1", clone_cache_root=cache_root)
+
+    (origin_dir / "app" / "models.py").write_text("x = m.model_dump()\n")
+    _run_git("git", "add", ".", cwd=origin_dir)
+    _run_git("git", "commit", "-q", "-m", "post", cwd=origin_dir)
+    new_sha = _run_git("git", "rev-parse", "HEAD", cwd=origin_dir)
+
+    new_repo = replace(repo, pre_sha=new_sha)
+    checkout_pre_sha(new_repo, tmp_path / "dest2", clone_cache_root=cache_root)
+
+    assert (tmp_path / "dest2" / "app" / "models.py").read_text() == "x = m.model_dump()\n"
+
+
+def test_checkout_pre_sha_cleans_up_a_failed_first_clone_instead_of_leaving_a_stuck_cache(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D70: found live verifying this fix -- a real repo_id
+    (`Aiven-Open__rohmu`) hit a real 300s GitHub throttle timeout on its first-ever
+    `git clone --mirror`, which leaves a half-created bare-repo skeleton (HEAD/config/
+    hooks/objects dirs, no real object data) sitting at `cache_path`. Without cleanup, a
+    later call would see `cache_path.exists()` and wrongly treat that skeleton as a
+    complete cache forever, never retrying the real clone. A failed FIRST clone must
+    raise (no cache to fall back to -- unlike a failed refresh fetch against an already-
+    populated cache) but must also leave nothing behind, so a later call against a
+    now-working origin starts clean and succeeds."""
+    cache_root = tmp_path / "clone_cache"
+    bad_repo = replace(
+        _repo(None), repo_id="acme__brokenclone", url=str(tmp_path / "does-not-exist")
+    )
+
+    try:
+        checkout_pre_sha(bad_repo, tmp_path / "dest1", clone_cache_root=cache_root)
+        raise AssertionError("expected the bad clone to raise")
+    except subprocess.CalledProcessError:
+        pass
+
+    assert not (cache_root / bad_repo.repo_id).exists()
+
+    origin_dir, pre_sha = _make_clonable_repo(tmp_path, name="origin4")
+    good_repo = replace(bad_repo, url=str(origin_dir), pre_sha=pre_sha)
+    checkout_pre_sha(good_repo, tmp_path / "dest2", clone_cache_root=cache_root)
+
+    assert (tmp_path / "dest2" / "app" / "models.py").read_text() == "x = m.dict()\n"
+
+
 def test_run_corpus_with_resume_skips_a_cell_already_in_the_store(tmp_path: Path) -> None:
     config = _config()
     repo = _repo(_baseline(frozenset({"t.py::test_a"})))
@@ -375,6 +474,7 @@ def test_run_corpus_with_resume_skips_a_cell_already_in_the_store(tmp_path: Path
         model_client=None,
         config=config,
         resume=resume,
+        clone_cache_root=tmp_path / "clone_cache",
     )
 
     assert results == [existing]
@@ -403,6 +503,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         model_client=None,
         config=config,
         resume=resume,
+        clone_cache_root=tmp_path / "clone_cache",
     )
     assert len(first) == 1
     assert store.has_result(repo.repo_id, config_hash(config), "deadbeef") is True
@@ -418,6 +519,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         model_client=None,
         config=config,
         resume=resume,
+        clone_cache_root=tmp_path / "clone_cache",
     )
     assert second == first
 
@@ -477,6 +579,7 @@ def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
         model_client=None,
         config=_config(),
         max_workers=n_repos,
+        clone_cache_root=tmp_path / "clone_cache",
     )
     elapsed = time.time() - start
 
@@ -525,6 +628,7 @@ def test_run_corpus_shares_one_embedder_instance_across_concurrent_repos(
         model_client=None,
         config=config,
         max_workers=n_repos,
+        clone_cache_root=tmp_path / "clone_cache",
     )
 
     assert len(results) == n_repos
@@ -540,6 +644,7 @@ def test_run_corpus_rejects_a_sub_one_max_workers(tmp_path: Path) -> None:
             model_client=None,
             config=_config(),
             max_workers=0,
+            clone_cache_root=tmp_path / "clone_cache",
         )
         raise AssertionError("expected ValueError")
     except ValueError as e:
@@ -570,6 +675,7 @@ def test_run_corpus_total_usd_cap_stops_starting_new_repos(tmp_path: Path) -> No
         model_client=fake_model,
         config=config,
         total_usd_cap=3.0,
+        clone_cache_root=tmp_path / "clone_cache",
     )
 
     # repo0 runs (spend now >= $2, still < $3 cap when repo1 is CHECKED) -- repo1 runs

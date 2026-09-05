@@ -3150,6 +3150,114 @@ suggestive."
 
 ---
 
+## D70 — Persistent per-repo_id clone cache in `checkout_pre_sha`
+
+**Alternatives:** A shallow clone (`--depth=1`) instead of a cache — rejected: it still
+does a full fresh remote transfer on every single call, so it would reduce bytes
+transferred per clone but not the CALL COUNT that actually tripped GitHub's throttling —
+the incident's own evidence (always the same repos, always a connect/transfer timeout)
+points at request/connection frequency from one IP, not bytes. `git clone --reference`
+against a single shared non-mirror working clone — rejected in favor of a `--mirror`
+(bare) cache specifically: a mirror's fetch refspec (`+refs/*:refs/*`) is already correct
+for "pick up anything new," where a plain clone's default refspec only tracks one branch,
+and a bare repo can't accidentally be left checked out at the wrong ref by some other
+code path touching it. Retrying the fresh clone with backoff instead of caching — rejected:
+retries alone don't change the request COUNT across a whole night's 5-arm matrix, only
+the timing of each one; this session's incident report already named the fix ("a
+persistent local clone cache") as the real next step, not smarter retries. Deleting and
+re-cloning the cache periodically (e.g. once a day) to bound its staleness — rejected as
+unneeded complexity: `pre_sha`/`post_sha` are immutable shas pinned in `corpus/manifest.json`
+forever, so a cache entry is never actually stale for what this harness uses it for; the
+only thing a `fetch` can add is a commit this harness will never look up.
+
+**Why:** `docs/results/main.md`'s 2026-09-05 caveat: a full 5-arm eval matrix run hit
+`git clone` timeouts (`CLONE_TIMEOUT_S=300`, `eval/harness.py`) on 5 of the corpus's 7
+repos — `Aiven-Open__rohmu`, `SupImDos__pydantic-argparse`, `iscc__iscc-core`,
+`madkote__fastapi-plugins`, `okfn__opendataeditor` — reproducibly across the `wholefile`,
+`embedding`, and `no_t1` re-runs that night, while `eyurtsev__kor` and `cmudig__draco2`
+never had any issue. `checkout_pre_sha`'s old implementation did one fresh, full
+`git clone` of the ORIGIN per repo PER call — and `run_corpus` calls it once per repo on
+EVERY arm and EVERY re-run, so that one session's repeated re-runs across five arms
+cloned the same ~7 repos dozens of times over a few hours. The failure pattern (always
+the same repos, always a connect/transfer timeout, never a parse or auth error) matches
+GitHub rate-limiting/throttling a single source IP after sustained repeated cloning, not
+a bug in this project's own logic.
+
+**Fixed by** splitting `checkout_pre_sha`'s single `git clone` into two steps, via a new
+`_populate_or_refresh_cache` helper: (1) a persistent `git clone --mirror` per `repo_id`
+under `clone_cache_root` (default `clone_cache/`, gitignored like `eval_work/`, but kept
+INDEPENDENT of `work_root` so pointing `--work-root` at a fresh/scratch location per run
+never silently drops the one thing that's expensive to rebuild) — created via one real
+remote clone the first time a repo_id is ever seen, refreshed via a cheap `git fetch`
+every call after; (2) the actual working checkout `run_repo` operates on is now always a
+LOCAL clone from that cache (`git clone <cache_path> <dest>`, no network at all) followed
+by the same `git checkout <pre_sha>` as before. Real GitHub network traffic now happens
+once per repo_id ever (the first mirror clone) plus one small `fetch` per subsequent
+call, instead of one full fresh clone per call. A failed refresh `fetch` against an
+already-populated cache (origin still throttled, a transient blip) is logged and
+swallowed, not raised — `pre_sha` is a pinned historical commit already permanently
+present in the cache after the first successful clone, so a fetch failing to pick up
+newer commits this harness will never need shouldn't fail the whole checkout. A failed
+FIRST clone (no cache yet to fall back to) still raises, but now also cleans up the
+half-created `cache_path` first (see the live finding below) so a later retry starts
+clean instead of getting stuck reading a broken skeleton as "already cached." `clone_cache_root`
+is threaded through `checkout_pre_sha` → `_run_one_repo` → `run_corpus` → `eval/run.py`'s
+new `--clone-cache-root` CLI option, defaulting everywhere to the same `clone_cache/` path.
+
+**Verified live against real GitHub repos, not just pytest:** ran `checkout_pre_sha`
+directly against 3 of the 5 repos named in the incident (`madkote__fastapi-plugins`,
+`SupImDos__pydantic-argparse`, `Aiven-Open__rohmu`), real network, real shas from
+`corpus/manifest.json`, into a scratch `clone_cache_root`:
+- `madkote__fastapi-plugins`: first call (real remote mirror clone) took 1.45s; a SECOND
+  call for the same repo_id took 0.82s — no fresh remote clone, cache reused.
+- `SupImDos__pydantic-argparse` — one of the 5 repos that reproducibly timed out in the
+  original incident: first call took 2.86s; second call took 0.87s. Under the OLD code
+  this repo needed a full fresh clone on every single call and was one of the ones that
+  reliably hit the 300s wall; under the new code its total real-network cost across an
+  entire multi-arm, multi-rerun session is paid ONCE, in under 3 seconds.
+- `Aiven-Open__rohmu` — also one of the 5 — genuinely REPRODUCED the original failure:
+  its first-ever `git clone --mirror` hit GitHub's throttle and raised
+  `subprocess.TimeoutExpired` at exactly `CLONE_TIMEOUT_S=300`, the identical signature
+  the incident report describes. This is direct confirmation the throttling is real and
+  still occasionally hits a repo's very first clone — but critically, that cost is now
+  paid AT MOST ONCE per repo_id ever, not once per run per arm the way the original bug
+  compounded it into "dozens of times in one night." Inspecting the killed clone's
+  leftover `cache_path` afterward showed a real live edge case: a half-created bare-repo
+  skeleton (HEAD/config/hooks/objects/refs, ~80KB, no actual object data) that a later
+  call would have wrongly read as "fully cached" forever — `cache_path.exists()` doesn't
+  distinguish a complete mirror from an interrupted one. Fixed by wrapping the first-clone
+  branch in a try/except that removes `cache_path` before re-raising, confirmed by
+  `tests/eval/test_harness.py::test_checkout_pre_sha_cleans_up_a_failed_first_clone_instead_of_leaving_a_stuck_cache`
+  (a clone against a nonexistent local path fails, asserts the cache dir is gone
+  afterward, then a second call against a real origin succeeds cleanly).
+
+Also unit-tested (no real network, matching CLAUDE.md's "no network in unit tests" —
+real local git repos stand in for a remote, this project's established pattern):
+`test_checkout_pre_sha_populates_the_cache_and_the_working_dir_on_first_call`,
+`test_checkout_pre_sha_second_call_reuses_the_cache_even_if_origin_is_gone` (points the
+second call's url at a path that no longer exists at all — a fresh remote clone attempt
+would raise, so success proves the cache, not a lucky re-clone, served the checkout),
+`test_checkout_pre_sha_fetch_picks_up_a_new_commit_in_an_existing_cache` (checks out a
+commit that didn't exist when the cache was first populated -- only reachable if the
+second call's `fetch` actually ran), and the cleanup test above. Every existing
+`run_corpus`-level test in `tests/eval/test_harness.py` was updated to pass an explicit
+`tmp_path`-scoped `clone_cache_root` so pytest never touches the real project-level
+`clone_cache/` directory.
+
+**Interview:** "The live verification did more than confirm the happy path — it actually
+reproduced the original bug on one of the exact repos that caused it, on the very first
+clone, with the identical 300-second timeout signature. That's the strongest evidence I
+could ask for that this fix targets the real failure, not a guess at it. But it also
+surfaced a bug in my own fix I hadn't considered from the design alone: a clone killed
+mid-flight by that same timeout leaves a half-built bare repo sitting exactly where the
+cache expects a complete one, and `Path.exists()` can't tell the difference. Reviewing my
+own diff adversarially after seeing that -- not before -- is exactly the kind of thing a
+15-minute interview would ask about, and 'I found it by actually running the thing
+against real repos instead of trusting the design doc' is a better answer than not
+having hit it at all."
+
+---
+
 ## Template
 
 ```
