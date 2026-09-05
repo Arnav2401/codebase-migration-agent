@@ -3,12 +3,13 @@
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden.
 
 > **Full-matrix re-run 2026-09-05, immediately after D70's clone-cache fix merged —
-> a complete clean sweep.** All five re-attempted arms (`graph`, `wholefile`,
-> `embedding`, `no_t1`, `no_triage`) got all 7 repos checked out with ZERO clone
-> timeouts, confirming D70's fix: the prior full-matrix run (same date, earlier) hit
-> the 300s clone timeout on 5 of these same 7 repos, repeatedly, across multiple arms.
-> `clone_cache/` populated once during `graph`'s run and every later arm reused it —
-> no further remote clone traffic for the rest of the matrix.
+> a complete clean sweep.** All six re-attempted arms (`graph`, `wholefile`,
+> `embedding`, `no_t1`, `no_triage`, `model_groq`) got all 7 repos checked out with ZERO
+> clone timeouts, confirming D70's fix: the prior full-matrix run (same date, earlier)
+> hit the 300s clone timeout on 5 of these same 7 repos, repeatedly, across multiple
+> arms. `clone_cache/` populated once during `graph`'s run and every later arm reused
+> it — no further remote clone traffic for the rest of the matrix, including
+> `model_groq`'s run, which completed in well under a minute.
 >
 > Gemini quota was genuinely open for most of this run (closed again for `no_t1`'s
 > specific window — honest variance, unrelated to the clone fix). This produced the
@@ -19,9 +20,13 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 > `SupImDos__pydantic-argparse`, `cmudig__draco2`, and `madkote__fastapi-plugins`
 > (the last touching EIGHT files in one attempt) — still had zero effect on `pass_rate`,
 > extending D69's finding with zero exceptions found yet. `no_triage`'s `eyurtsev__kor`
-> `repair_no_target` outcome (the `triage=False` code path) also reproduced a second time.
+> `repair_no_target` outcome (the `triage=False` code path) also reproduced a second
+> time. `model_groq` was additionally re-run at the user's request and reproduced its
+> now-classic finding a FIFTH consecutive time (same 2/7 repos get real, zero-effect
+> repairs; same 4/7 hit `413 Payload Too Large`; same 1/7 correctly skipped) — as settled
+> a finding as this project has.
 >
-> `t1_only` and `model_groq` correctly not re-run (already settled per D69).
+> `t1_only` correctly not re-run (already settled per D69, never calls a model at all).
 
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost |
 |---|---|---|---|---|
@@ -64,8 +69,8 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0008 | 2 |
-| cmudig__draco2 | 0.884 | False | 0.0012 | 2 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0006 | 2 |
+| cmudig__draco2 | 0.884 | False | 0.0011 | 2 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
 | iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
 | madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
