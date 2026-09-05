@@ -1,20 +1,19 @@
 # Eval results — `graph`
 
-> **Re-run 2026-09-04 (fourth attempt) — quota-blocked again, same pattern as the third
-> attempt.** Every repo needing repair hit an immediate 429; `eyurtsev__kor` is
-> unaffected either way (D37). This arm's outcome across four attempts now shows a clear
-> split: one attempt (the second) got real Gemini responses through — real repair
-> attempts, $0.30 cost, a consistently unparseable-patch failure mode on
-> `iscc__iscc-core`, two mechanically-accepted repairs that didn't change `pass_rate` —
-> and three attempts (first, third, fourth) hit the 429 wall immediately. That's not a
-> flaky arm; it's a direct readout of Gemini's free-tier quota window being narrow and
-> largely closed relative to how often this session has been hitting it. The one real
-> result stands on its own merits regardless of how the quota lottery goes on any given
-> re-attempt. Numbers below are the degenerate T1-only shape, byte-identical to
-> `t1_only`/every quota-blocked arm.
+> **Full-matrix re-run 2026-09-05, after waiting ~6.5 hours for Gemini quota to clear.**
+> A cheap probe call succeeded, confirming quota was open — but the very first real
+> attempt (this one) hit `429 Client Error` on every single repo needing repair
+> (`madkote__fastapi-plugins`, `Aiven-Open__rohmu`, `iscc__iscc-core`, `cmudig__draco2`,
+> `okfn__opendataeditor`); `SupImDos__pydantic-argparse` hit a 120s read timeout instead
+> (Gemini accepted the connection but never responded). `eyurtsev__kor` unaffected either
+> way (`preexisting`, D37). The quota window that let the probe through appears to have
+> closed again within moments of real usage starting — consistent with D48's own
+> "narrow and largely closed" characterization, just demonstrated freshly after a much
+> longer wait than any prior attempt this session. All 7 repos DID get checked out and
+> tested cleanly this time (no clone issues for this arm specifically). Numbers below are
+> the T1-only-shaped degenerate result, byte-identical to `t1_only`.
 
-**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (quota-blocked this
-attempt, 3 of 4 total attempts have been — see caveat above)
+**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 

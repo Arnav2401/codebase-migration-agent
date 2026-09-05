@@ -1,5 +1,5 @@
 {
-  "agent_git_sha": "c1881f28af007c5da690b505a238620825da9ce8",
+  "agent_git_sha": "aea8d599b1ac6bad86b994a4187a818269c8d878",
   "config": {
     "model": "gemini-3.6-flash",
     "name": "embedding",
@@ -14,12 +14,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788525113.813751,
+  "ended_at": 1788577165.639595,
   "model": "gemini-3.6-flash",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
   "seed": 0,
-  "started_at": 1788525016.069788,
+  "started_at": 1788572837.6949928,
   "temperature": 0
 }

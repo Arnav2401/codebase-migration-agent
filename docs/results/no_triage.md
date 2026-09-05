@@ -1,16 +1,16 @@
 # Eval results — `no_triage`
 
-> **Re-run 2026-09-04 (fourth attempt) — same quota wall, same real finding reproduces
-> a fourth time.** 6 of 7 repos hit Gemini's 429 wall immediately. `eyurtsev__kor` again
-> gets the distinct `triage=False` path: D37's all-preexisting skip is disabled, repair
-> genuinely fires (`iterations=2`) and hits `agent.repair_no_target` — identical outcome
-> to all three prior runs. Four consecutive independent runs producing the exact same
-> `repair_no_target` result confirms this is a stable, real behavior of the
-> `use_triage=False` path on this specific repo. Numbers otherwise byte-identical to
-> every prior attempt.
+> **Full-matrix re-run 2026-09-05, after waiting ~6.5 hours for Gemini quota to clear —
+> the one arm this round that got all 7 repos checked out and tested cleanly, no clone
+> timeouts.** Every repo needing repair hit the 429 wall (`madkote__fastapi-plugins`,
+> `SupImDos__pydantic-argparse`, `iscc__iscc-core`, `Aiven-Open__rohmu`, `cmudig__draco2`,
+> `okfn__opendataeditor`). `eyurtsev__kor` again took the genuinely different
+> `triage=False` code path (D37's all-preexisting skip is disabled, so repair was
+> actually attempted) and got `agent.repair_no_target` — same real, non-quota outcome as
+> the previous round's confirmation of this code path, reproduced again. Fully
+> quota-blocked overall; numbers below are the T1-only-shaped degenerate result.
 
-**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00 (quota-blocked again
-except eyurtsev__kor's fourth confirmed no-target attempt, see caveat above)
+**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
