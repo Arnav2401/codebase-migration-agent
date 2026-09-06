@@ -3258,6 +3258,54 @@ having hit it at all."
 
 ---
 
+## D71 — Wire diff-similarity metrics into `report.py`, excluding unmeasured repos from the mean
+
+**Alternatives:** treat a `None` `diff_line_jaccard`/`symbol_precision`/`symbol_recall`
+(D57/D58: "not measured," not a real 0.0) as `0.0` when computing each arm's mean —
+rejected: this would silently understate an arm's diff-similarity if even one repo never
+got a real human ground-truth diff to compare against (e.g. a `preexisting`-only repo, or
+a quota-blocked repo where the agent never touched anything), exactly the kind of
+fabricated number CLAUDE.md's "never a number that isn't honest" rule exists to catch.
+Reporting the mean over measured repos with no indication of how many were actually
+measured — rejected: `mean=0.9` reads very differently depending on whether it's `n=7/7`
+or `n=1/7`, and phase-5-eval.md's own principle ("publish the full per-repo table so
+nobody has to trust the aggregate") extends naturally to "publish how much of the
+aggregate is real."
+
+**Why:** `eval/harness.py`'s `compute_diff_similarity` has computed and stored
+`diff_line_jaccard`/`symbol_precision`/`symbol_recall` on every `RepoResult` since D57/D58
+— real data has existed in `eval_results.db` for a while — but `eval/report.py` never
+rendered any of it into `docs/results/*.md`. Caught by re-checking phase-5-eval.md's
+"Metrics implementation" section against the actual write-up while assessing how much of
+Phase 5 remained: the "diff similarity... report both" requirement was silently unmet
+even though the underlying computation was already done and tested.
+
+**Fixed by** adding `_diff_similarity_cells` (per-repo `—`-for-`None` rendering) and
+`_diff_ci_or_missing` (bootstrap 95% CI over only the non-`None` values, reporting
+`n=<measured>/<total>`, or an explicit `"no diff data"` string instead of letting
+`bootstrap_mean_ci`'s empty-input `ValueError` propagate when an arm has zero measured
+repos) to both `write_results_table`'s per-repo table and `write_main_report`'s headline
+row + per-repo appendix. Two new tests in `tests/eval/test_report.py` pin the `—`
+rendering and the `n=1/2` partial-measurement case specifically, so a future change can't
+silently start zero-filling `None` again.
+
+Deliberately NOT regenerated against the live `eval_results.db` in the same change: the
+DB's current `graph`/`wholefile`/`embedding`/`no_t1`/`no_triage` rows are from a fully
+quota-blocked re-run (zero real repairs, so ~nothing to show in the new columns) that
+already overwrote the richer 2026-09-05 full-matrix round's rows — regenerating now would
+have clobbered the write-up right after explicitly restoring it to that richer round's
+numbers. The new columns populate naturally the next time a real (non-quota-blocked) run
+scores these arms.
+
+**Interview:** "The computation existed and was tested — the gap was purely in the
+reporting layer, which is exactly the kind of thing that's easy to miss because nothing
+crashes when a metric is computed but never displayed. The more interesting design
+question was what to do with 'not measured' — zero-filling it would have been the easy
+path and also the dishonest one, since it changes the reported mean based on how many
+repos simply couldn't be compared, not on how good the agent's fixes actually were."
+
+---
+
 ## Template
 
 ```

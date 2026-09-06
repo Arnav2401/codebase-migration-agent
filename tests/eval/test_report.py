@@ -10,7 +10,15 @@ def _config() -> EvalConfig:
     return EvalConfig(name="graph", model="gemini-3.6-flash")
 
 
-def _result(repo_id: str, pass_rate: float, full_green: bool, usd_spent: float = 0.1) -> RepoResult:
+def _result(
+    repo_id: str,
+    pass_rate: float,
+    full_green: bool,
+    usd_spent: float = 0.1,
+    diff_line_jaccard: float | None = None,
+    symbol_precision: float | None = None,
+    symbol_recall: float | None = None,
+) -> RepoResult:
     return RepoResult(
         repo_id=repo_id,
         config=_config(),
@@ -22,6 +30,9 @@ def _result(repo_id: str, pass_rate: float, full_green: bool, usd_spent: float =
         final_diagnosis_counts=Counter(),
         avg_failures_per_diagnosis=0.0,
         scored_repairs=(),
+        diff_line_jaccard=diff_line_jaccard,
+        symbol_precision=symbol_precision,
+        symbol_recall=symbol_recall,
     )
 
 
@@ -96,8 +107,41 @@ def test_write_main_report_reports_an_empty_arm_without_crashing(tmp_path: Path)
     write_main_report({"graph": [_result("acme__a", 1.0, True)], "no_t1": []}, out_path)
 
     content = out_path.read_text()
-    assert "| no_t1 | 0 | no repos scored | no repos scored | — |" in content
+    assert (
+        "| no_t1 | 0 | no repos scored | no repos scored | — | "
+        "no diff data | no diff data | no diff data |" in content
+    )
     assert "### no_t1" in content
+
+
+def test_write_results_table_renders_missing_diff_similarity_as_an_em_dash(
+    tmp_path: Path,
+) -> None:
+    out_path = tmp_path / "graph.md"
+    write_results_table([_result("acme__a", 1.0, True)], out_path, config_name="graph")
+
+    content = out_path.read_text()
+    assert "| acme__a | 1.000 | True | 0.1000 | 2 | — | — | — |" in content
+    assert "no diff data" in content  # summary line: zero repos had a measurement
+
+
+def test_write_results_table_reports_diff_similarity_only_over_measured_repos(
+    tmp_path: Path,
+) -> None:
+    out_path = tmp_path / "graph.md"
+    results = [
+        _result(
+            "acme__a", 1.0, True, diff_line_jaccard=0.5, symbol_precision=1.0, symbol_recall=0.5
+        ),
+        _result("acme__b", 0.0, False),  # not measured -- must not count as a 0.0
+    ]
+
+    write_results_table(results, out_path, config_name="graph")
+
+    content = out_path.read_text()
+    assert "| acme__a | 1.000 | True | 0.1000 | 2 | 0.500 | 1.000 | 0.500 |" in content
+    assert "| acme__b | 0.000 | False | 0.1000 | 2 | — | — | — |" in content
+    assert "(n=1/2)" in content  # only one of the two repos had a real measurement
 
 
 def test_write_main_report_ci_bounds_bracket_the_point_estimate(tmp_path: Path) -> None:
