@@ -2,41 +2,41 @@
 
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden.
 
-> **Full-matrix re-run 2026-09-05, immediately after D70's clone-cache fix merged —
-> a complete clean sweep.** All six re-attempted arms (`graph`, `wholefile`,
-> `embedding`, `no_t1`, `no_triage`, `model_groq`) got all 7 repos checked out with ZERO
-> clone timeouts, confirming D70's fix: the prior full-matrix run (same date, earlier)
-> hit the 300s clone timeout on 5 of these same 7 repos, repeatedly, across multiple
-> arms. `clone_cache/` populated once during `graph`'s run and every later arm reused
-> it — no further remote clone traffic for the rest of the matrix, including
-> `model_groq`'s run, which completed in well under a minute.
+> **Re-run 2026-09-06, after a multi-hour Gemini-quota wait loop — came back fully
+> quota-blocked.** `graph`, `wholefile`, `embedding`, `no_t1`, and `no_triage` were all
+> re-attempted (`model_groq` and `t1_only` intentionally left untouched — settled,
+> non-Gemini-dependent). The wait loop's own cheap 1-token quota probe succeeded right
+> before this run started, and `docker info` was verified up, but the window closed
+> again before any real repair call landed: all 35 repo-attempts (5 arms × 7 repos) hit
+> either `429 Too Many Requests`, a `Read timed out`, or a transient DNS resolution
+> failure on `generativelanguage.googleapis.com`. Zero `repair_applied` anywhere this
+> round. This is an honest negative result, not a failure to hide — it sharpens D48's
+> finding that Gemini's free-tier quota trickle-refills unpredictably and that a
+> successful cheap probe does not predict subsequent real usage will succeed.
 >
-> Gemini quota was genuinely open for most of this run (closed again for `no_t1`'s
-> specific window — honest variance, unrelated to the clone fix). This produced the
-> richest real-repair dataset of the whole project: `iscc__iscc-core`'s `repair_rejected`
-> corrupt-patch failure (`corrupt patch at line 392`) reproduced identically across
-> `graph`, `wholefile`, and `embedding` — a well-established, retrieval-strategy-independent
-> finding. Every real `repair_applied` this round — across `Aiven-Open__rohmu`,
-> `SupImDos__pydantic-argparse`, `cmudig__draco2`, and `madkote__fastapi-plugins`
-> (the last touching EIGHT files in one attempt) — still had zero effect on `pass_rate`,
-> extending D69's finding with zero exceptions found yet. `no_triage`'s `eyurtsev__kor`
-> `repair_no_target` outcome (the `triage=False` code path) also reproduced a second
-> time. `model_groq` was additionally re-run at the user's request and reproduced its
-> now-classic finding a FIFTH consecutive time (same 2/7 repos get real, zero-effect
-> repairs; same 4/7 hit `413 Payload Too Large`; same 1/7 correctly skipped) — as settled
-> a finding as this project has.
+> Zero clone timeouts across all 35 attempts — D70's persistent clone-cache fix
+> continues to hold completely (one minor, non-fatal `clone_cache_fetch_failed` warning
+> during `embedding`, cache reused fine). `no_triage`'s `eyurtsev__kor` `repair_no_target`
+> outcome reproduced a third consecutive time — a real, quota-independent signal.
+> `model_groq` was NOT re-run this round (its own real-capacity finding is settled at
+> five independent runs, see `model_groq.md`).
 >
-> `t1_only` correctly not re-run (already settled per D69, never calls a model at all).
+> This round adds no new real-repair signal beyond the prior full-matrix round already
+> documented in each arm's own file below and in this project's decision log — that
+> earlier round (rich `repair_applied` activity across `Aiven-Open__rohmu`,
+> `SupImDos__pydantic-argparse`, `cmudig__draco2`, `madkote__fastapi-plugins`, plus
+> `iscc__iscc-core`'s reproducible corrupt-patch rejection) remains the richest real
+> dataset collected for this project so far.
 
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost |
 |---|---|---|---|---|
-| embedding | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.04 |
-| graph | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.05 |
+| embedding | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
+| graph | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | model_groq | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | no_triage | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 | t1_only | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
-| wholefile | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.02 |
+| wholefile | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 |
 
 ## Per-repo appendix
 
@@ -44,11 +44,11 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0588 | 2 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
 | SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
-| cmudig__draco2 | 0.884 | False | 0.0655 | 2 |
+| cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.1267 | 3 |
+| iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
 | madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
 
@@ -57,11 +57,11 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0419 | 2 |
-| cmudig__draco2 | 0.884 | False | 0.0083 | 2 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
+| cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.1660 | 3 |
-| madkote__fastapi-plugins | 0.000 | False | 0.1331 | 2 |
+| iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
+| madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
 
 ### model_groq
@@ -116,10 +116,10 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0414 | 2 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
 | SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
 | cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.0741 | 3 |
-| madkote__fastapi-plugins | 0.000 | False | 0.0385 | 2 |
+| iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
+| madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |

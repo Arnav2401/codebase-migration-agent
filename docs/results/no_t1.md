@@ -1,14 +1,13 @@
 # Eval results — `no_t1`
 
-> **Full-matrix re-run 2026-09-05, fourth arm in the same coordinated matrix run —
-> zero clone timeouts (fourth consecutive clean arm).** `no_t1` disables T1 by design
-> (D62), so repair (T2/T3) is the only mechanism that could fix anything, same as every
-> prior run. Quota happened to be fully closed for this specific arm's window: every
-> repo needing repair hit an immediate 429 (`Aiven-Open__rohmu`, `SupImDos__pydantic-argparse`,
-> `iscc__iscc-core`, `madkote__fastapi-plugins`, `cmudig__draco2`, `okfn__opendataeditor`).
-> `eyurtsev__kor` unaffected either way (`preexisting`, D37). Honest variance, not a
-> regression — the clone-cache fix has nothing to do with Gemini's own quota window,
-> and this arm's real-repair luck simply ran out this round.
+> **Re-run 2026-09-06, fourth arm in the same fully quota-blocked re-run round.**
+> `no_t1` disables T1 by design (D62), so repair is the only mechanism that could fix
+> anything here, same as ever. `SupImDos__pydantic-argparse`, `Aiven-Open__rohmu`,
+> `madkote__fastapi-plugins`, `iscc__iscc-core`, and `okfn__opendataeditor` all hit
+> `429`; `cmudig__draco2` got a 429 followed by a `Read timed out (read timeout=120)`
+> on retry roughly 25 minutes later. Zero `repair_applied`. `eyurtsev__kor` unaffected
+> either way (`preexisting`, D37). Zero clone timeouts (D70 holds). No new real-repair
+> signal beyond the prior full-matrix round already documented for this arm.
 
 **7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00
 
