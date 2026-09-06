@@ -1,32 +1,34 @@
 # Eval results — `graph`
 
-> **Re-run 2026-09-06, after a multi-hour Gemini-quota wait loop — came back fully
-> quota-blocked.** The wait loop's own cheap 1-token probe succeeded moments before this
-> run started (and `docker info` was verified up), but every one of the 7 real repair
-> calls this arm made hit a wall anyway: `SupImDos__pydantic-argparse` and
-> `madkote__fastapi-plugins` got `429 Too Many Requests`, `Aiven-Open__rohmu` and
-> `iscc__iscc-core` got the same 429 followed later by a transient DNS resolution failure
-> on retry, `cmudig__draco2` and `okfn__opendataeditor` hit real infra errors (DNS
-> resolution failure / no route to host) rather than quota specifically. Zero
-> `repair_applied` anywhere. This strengthens D48's finding rather than contradicting
-> it: a successful cheap probe call does not guarantee the quota window stays open long
-> enough for real, larger repair calls seconds later.
+> **Full-matrix re-run 2026-09-05, immediately after D70's clone-cache fix merged.**
+> `clone_cache/` was empty at the start of this run, so all 7 repos needed a fresh remote
+> clone — and every one succeeded cleanly, zero timeouts. This is the confirming
+> evidence for D70: the prior full-matrix run (docs/decisions.md, same date, earlier)
+> hit the 300s clone timeout on 5 of these same 7 repos across multiple arms; this run
+> and the four that followed it (`wholefile`/`embedding`/`no_t1`/`no_triage`, all sharing
+> this same populated cache) had zero clone failures anywhere.
 >
-> Zero clone timeouts (7/7 repos, all served from `clone_cache/`) — D70's fix continues
-> to hold. This run adds no new real-repair signal; the prior full-matrix round (still
-> documented in this project's decision log and git history) remains the richest real
-> dataset collected for this arm.
+> Gemini quota was genuinely open this round, and this is the richest real-signal
+> `graph` run yet: `iscc__iscc-core` reproduced its exact `repair_rejected` failure
+> (`corrupt patch at line 392`) TWICE — a third+ sighting of this specific repeatable
+> failure mode. `SupImDos__pydantic-argparse` and `cmudig__draco2` each got a real
+> `repair_applied` with zero effect on `pass_rate` (yet more D69 confirmations).
+> `madkote__fastapi-plugins` is the richest single data point of this whole project:
+> EIGHT files got a real `repair_applied` (`fix_import`, real cost) in one attempt, plus
+> one `repair_rejected` for touching a test file (I1 correctly enforced) — and
+> `pass_rate` still didn't move. `Aiven-Open__rohmu` and `okfn__opendataeditor` both hit
+> a 120s Gemini read timeout (not quota, not a rejection). Real total cost: $0.35.
 
-**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.00
+**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.35
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
 | repo_id | pass_rate | full_green | usd_spent | iterations |
 |---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
-| cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0419 | 2 |
+| cmudig__draco2 | 0.884 | False | 0.0083 | 2 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.0000 | 1 |
-| madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 |
+| iscc__iscc-core | 0.000 | False | 0.1660 | 3 |
+| madkote__fastapi-plugins | 0.000 | False | 0.1331 | 2 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
