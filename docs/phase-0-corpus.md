@@ -96,7 +96,20 @@ corpus after you have numbers means re-running everything; treat it as a version
 - [ ] ≥30 repos (or a documented fallback in use), each with a recorded baseline pass set
 - [ ] Drop-reason histogram written to `docs/results/corpus.md`
 - [ ] Two runs of baseline capture produce identical pass sets (determinism check)
-- [ ] dev/test split assigned and stratified — NOT DONE; all 7 corpus repos are `split="dev"` and zero are `"test"`. Blocks phase-5-eval.md's final acceptance criterion (docs/decisions.md D79).
+- [~] dev/test split assigned and stratified — PARTIAL. The split now EXISTS
+  (`COSCUP__COSCUP-Volunteer` carries `split="test"`, so the corpus is no longer dev-only),
+  but it is **not yet usable**: that repo fails baseline capture, so I4 ("only
+  baseline-passing tests count") leaves nothing to score and `run_repo` raises on it. It is
+  a Poetry project with `package-mode = false` (so `pip install -e .` cannot work) whose
+  tests import MongoDB-backed models, and the harness runs a single container with no side
+  services. Kept in the manifest with `baseline: null` per `capture_baselines.py`'s own
+  convention that a capture failure is not a human decision to drop a repo.
+
+  Reaching a usable test split needs candidates that survive baseline capture, and the
+  current pool is exhausted: 126 candidates discovered, 120 dropped, 6 survivors, of which
+  5 are the existing dev repos. See docs/decisions.md D79 (why dev repos must not be
+  relabelled as test) and D80 (a clone bug that was misreporting 27% of drops, now fixed —
+  it recovered no repos). phase-5-eval.md's test-split criterion stays blocked.
 
 ## Pitfalls
 

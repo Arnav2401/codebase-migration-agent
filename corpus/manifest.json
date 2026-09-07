@@ -2312,5 +2312,47 @@
         "src/server/stores/config.py"
       ]
     }
+  },
+  {
+    "repo_id": "COSCUP__COSCUP-Volunteer",
+    "url": "https://github.com/COSCUP/COSCUP-Volunteer",
+    "pre_sha": "e06dd321fc041b294e10e6df302d7cc8eb2aa98c",
+    "post_sha": "b0b6eac4c93fb52a8a7051209343e5d2733985cf",
+    "python_version": "3.11",
+    "install_cmd": [
+      "pip",
+      "install",
+      "-e",
+      ".[test]"
+    ],
+    "test_cmd": [
+      "pytest",
+      "-q"
+    ],
+    "setup_overrides": [],
+    "split": "test",
+    "baseline": null,
+    "human_diff_stats": {
+      "files_changed": 15,
+      "lines_added": 276,
+      "lines_removed": 213,
+      "changed_paths": [
+        "api/apistructs/items.py",
+        "api/apistructs/projects.py",
+        "api/apistructs/sender.py",
+        "api/apistructs/tasks.py",
+        "api/apistructs/teams.py",
+        "api/apistructs/users.py",
+        "module/api_token.py",
+        "module/budget.py",
+        "module/skill.py",
+        "poetry.lock",
+        "pyproject.toml",
+        "structs/projects.py",
+        "structs/tasks.py",
+        "structs/teams.py",
+        "structs/users.py"
+      ]
+    }
   }
 ]

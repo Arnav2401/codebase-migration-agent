@@ -3787,6 +3787,42 @@ number from them would be contaminated and, worse, would look legitimate."
 
 ---
 
+## D80 — `--filter=blob:none` silently broke commit location for 27% of candidates
+
+**Why:** `validate.py`'s `_clone_shallow` used `git clone --filter=blob:none --no-checkout`,
+a blobless partial clone. But locating a repo's migration commit is a `git log -S` pickaxe
+search, which must read blob CONTENT across history. Under a partial clone git fetches each
+of those blobs lazily from the promisor remote mid-search, and when a fetch fails — rate
+limit, transient network, an object the remote will not serve — the whole search aborts:
+
+    fatal: could not fetch <sha> from promisor remote
+
+`_locate_migration_commit` caught that as a plain subprocess failure and the candidate was
+dropped as `"could not locate a migration commit"`. A real migration was recorded as an
+absent one, and the drop log gave no hint that infrastructure, not the repo, was at fault.
+
+**Measured, not estimated:** 34 of 126 candidates (27%) hit this, across 86 log events.
+
+**Fixed by** removing the filter (keeping `--no-checkout`, which is where the actual
+saving was — no working tree is ever needed). Re-validating exactly those 34 candidates
+afterwards produced **zero** promisor errors, confirming the diagnosis.
+
+**And the honest punchline: it recovered nothing.** All 34 were still dropped, now for
+legitimate reasons — 13 genuinely have no locatable migration commit, and the rest are
+bundled feature commits (237, 300 files touched) or net-new-line fractions up to 0.97 that
+mark a feature add rather than a migration. So this fix bought correctness and a
+trustworthy drop log, not corpus size. Worth recording precisely because the tempting
+version of this story ("fixed a bug, unlocked 34 repos") is false.
+
+**Interview:** "27% of candidates were being rejected with 'could not locate a migration
+commit' when the real cause was that I'd cloned them blobless and the pickaxe search
+couldn't read history. The fix was one flag. What I'd actually want credit for is checking
+afterwards whether it recovered anything — it recovered zero repos, because those
+candidates were genuinely unsuitable. The bug was real and the fix was right, and it
+changed no outcome; saying so is the difference between a finding and a story."
+
+---
+
 ## Template
 
 ```

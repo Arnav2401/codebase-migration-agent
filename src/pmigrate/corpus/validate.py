@@ -114,7 +114,18 @@ def _clone_shallow(client: GitHubClient, full_name: str, repo_id: str) -> Path |
     """Cloned once per candidate now, not just for code-search-sourced ones with no known
     commit — `_pre_sha_is_clean_v1` below needs a real checkout for every candidate
     regardless of how its migration commit was found (docs/decisions.md D32: the gap that
-    let `plugboard` through wasn't in commit-location at all)."""
+    let `plugboard` through wasn't in commit-location at all).
+
+    NOT `--filter=blob:none` (docs/decisions.md D80). A blobless partial clone is a fine
+    default for most tooling, but it is actively wrong here: locating the migration commit
+    is a `git log -S` pickaxe search, which must read blob CONTENT across history. Under a
+    partial clone every one of those blobs is fetched lazily from the promisor remote
+    mid-search, and any failure (rate limit, transient network, an object the remote will
+    not serve) aborts the search with "could not fetch ... from promisor remote". Those
+    candidates were then dropped as "could not locate a migration commit" — a real
+    migration misreported as an absent one. Measured on the 126-candidate pool: 34 repos
+    (27%) failed this way. `--no-checkout` stays: no working tree is needed, and that is
+    where the actual disk/time saving was."""
     checkout = CHECKOUTS_DIR / repo_id
     if checkout.exists():
         shutil.rmtree(checkout)
@@ -124,7 +135,6 @@ def _clone_shallow(client: GitHubClient, full_name: str, repo_id: str) -> Path |
             [
                 "git",
                 "clone",
-                "--filter=blob:none",
                 "--no-checkout",
                 client.get_repo(full_name)["clone_url"],
                 str(checkout),
