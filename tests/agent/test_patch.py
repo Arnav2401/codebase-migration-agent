@@ -170,7 +170,7 @@ def test_apply_patch_fails_cleanly_on_diff_that_does_not_match_disk(tmp_path: Pa
 
 # --- apply_patch when repo_root is nested inside an unrelated git repo --------------
 #
-# The real bug (found live against a k=3 eval run, docs/decisions.md D72): every
+# The real bug (docs/decisions.md D73, found live against D72's k=3 eval run): every
 # `run_repo` call's `overlay_root` (`eval_work/<repo_id>/overlay/`) is a PLAIN directory
 # with no `.git` of its own, sitting several levels inside THIS project's own git
 # checkout. Bare `git apply` walks up from `cwd` looking for a `.git`; finding this

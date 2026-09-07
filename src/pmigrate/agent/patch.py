@@ -180,8 +180,9 @@ def apply_patch(repo_root: Path, unified_diff: str) -> PatchResult:
     # with nothing actually written to `repo_root`. `GIT_CEILING_DIRECTORIES` set to
     # `repo_root`'s own parent stops that upward walk before it ever reaches an enclosing
     # repo, regardless of how many levels above `repo_root` that repo's `.git` actually
-    # lives -- confirmed live: every "applied" repair in the first full eval run (D72)
-    # was exactly this silent no-op, because `eval_work/` sits inside this repo's worktree.
+    # lives -- confirmed live (docs/decisions.md D73): every "applied" repair in every eval
+    # run collected before 2026-09-07, including the first full k=3 seed run (D72), was
+    # exactly this silent no-op, because `eval_work/` sits inside this repo's worktree.
     #
     # `resolve()` BOTH the cwd git actually runs in and the ceiling path, from the SAME
     # `repo_root` object, rather than pairing a raw `cwd` with a resolved ceiling string:

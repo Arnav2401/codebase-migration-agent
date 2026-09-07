@@ -1,5 +1,25 @@
 # Eval results — main
 
+> **These are the first valid numbers this project has ever produced (2026-09-07).
+> Every result predating them is void — see docs/decisions.md D73.** `apply_patch` was
+> silently no-op'ing every T1 codemod and every T2/T3 repair: `git apply` resolved diff
+> paths against this project's own enclosing `.git` rather than the scratch overlay,
+> printed `Skipped patch` to stdout, exited 0, and the harness recorded `applied=True`
+> with nothing written to disk. Every earlier run measured the untouched baseline, which
+> is why all seven arms used to report identical per-repo pass rates (mean 0.266
+> everywhere, zero repos full green, diff-similarity exactly 0.000 across the board).
+> Seven ablations agreeing to three decimal places was the bug announcing itself.
+>
+> What changed once patches actually landed: `t1_only` 0.266 → 0.396 (the codemods do
+> real work), `graph` 0.266 → 0.431 with `full_green` 0.190, and `iscc__iscc-core` went
+> from an eternal 0.000 to 1.000, full green on all 3 seeds. It is not all good news, and
+> that is the useful part: `eyurtsev__kor` DROPPED from 0.955 to 0.655 — the agent
+> actively breaks a repo that was mostly passing, a regression the no-op bug had hidden
+> for the project's entire history.
+>
+> Note for whoever regenerates this file: `report_cli` rewrites it from scratch, so this
+> caveat is hand-maintained and will vanish on the next run. D73 is the durable record.
+
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden. N is the number of distinct repos, not repo x seed cells, even for an arm run under multiple seeds (docs/decisions.md D72).
 
 > **These arms do not all run the same model — do not read across the split.** Each row differs from the others in more than the thing its name calls out, so a difference between two arms on opposite sides of the split confounds the ablation with the model change and measures neither. Compare only within a model:

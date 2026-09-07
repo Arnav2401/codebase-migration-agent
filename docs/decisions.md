@@ -3089,6 +3089,15 @@ finding it required actually noticing a number that shouldn't have changed, did.
 
 ## D69 — Recurring finding: every real repair this session ever produced fixed nothing
 
+> **REFUTED by D73 (2026-09-07). Do not cite this finding.** Its central premise — that
+> repairs applied cleanly (`applied=True`, `violations=[]`) yet moved nothing — was false:
+> `apply_patch` was silently no-op'ing every patch, so none of these repairs ever reached
+> disk. "Applied cleanly and did nothing" was really "never applied." Post-fix, repairs do
+> move `pass_rate`. The entry is kept unedited below as the record of how a measurement
+> bug got mistaken for a result, and of the tell that should have caught it: the finding
+> reproduced *too* perfectly, across two model providers and every arm, which is what
+> pointed at the harness rather than the models once anyone asked why.
+
 **Alternatives:** treat each "applied cleanly, zero effect on pass_rate" result as an
 isolated, arm-specific data point — rejected once the SAME `(repo, strategy)` pair showed
 up as a repeat offender across TWO DIFFERENT LLM PROVIDERS, which stops being "one
@@ -3260,6 +3269,13 @@ having hit it at all."
 
 ## D71 — Wire diff-similarity metrics into `report.py`, excluding unmeasured repos from the mean
 
+> **Note (D73):** the reporting logic here is sound and still stands, but the "real data
+> has existed in `eval_results.db` for a while" claim below was wrong — that data was
+> produced under the `apply_patch` no-op bug, so every diff-similarity value it held was
+> comparing an *unmodified* overlay against the human's fix. Rendering it is what exposed
+> the bug: a uniform 0.000 across all 7 repos and all 7 arms is not a plausible
+> measurement, and chasing that implausibility led straight to D73.
+
 **Alternatives:** treat a `None` `diff_line_jaccard`/`symbol_precision`/`symbol_recall`
 (D57/D58: "not measured," not a real 0.0) as `0.0` when computing each arm's mean —
 rejected: this would silently understate an arm's diff-similarity if even one repo never
@@ -3374,6 +3390,82 @@ should be treated as one data point with noise, not two independent repos. The d
 question that mattered most was where to put the aggregation: grouping by repo before
 computing any arm-level statistic, rather than after, is what keeps a 3-seed re-run from
 quietly tripling that repo's influence on the reported confidence interval."
+
+---
+
+## D73 — `apply_patch` silently no-op'd every patch; every eval result before 2026-09-07 is void
+
+**This entry invalidates measured results, not just code.** Read it before trusting any
+number in `docs/results/` produced before 2026-09-07, or D69.
+
+**Why:** `git apply` resolves a diff's paths against the nearest enclosing `.git`, walking
+UP from its cwd — not against cwd itself. Every eval overlay
+(`eval_work/<repo_id>/overlay/`) is a plain scratch directory with no `.git` of its own,
+sitting inside this project's OWN checkout. So `git apply` walked up, found `pmigrate`'s
+`.git`, resolved the diff's paths against THAT root, found nothing there to patch, printed
+`Skipped patch '<path>'.` **to stdout with exit code 0** — not stderr, not a nonzero
+return — and `apply_patch` dutifully reported `applied=True` with **nothing written to
+disk**. Every T1 codemod and every T2/T3 repair, in every eval run this project ever
+collected, was a silent no-op. Each run measured the untouched baseline.
+
+The tell was visible for weeks and misread as signal: every arm reported the *identical*
+per-repo `pass_rate` every single time (`cmudig__draco2` 0.884, `eyurtsev__kor` 0.955,
+`okfn__opendataeditor` 0.022, `iscc__iscc-core` 0.000), mean 0.266 across all seven arms,
+zero repos ever full green, and — once D71 finally rendered them — diff-similarity of
+exactly 0.000 for all 7 repos across all 7 arms. Seven ablations that vary retrieval
+strategy, tier set, triage, and model do not agree to three decimal places. That
+uniformity was the bug announcing itself, and it got written up as a finding (D69)
+instead.
+
+**Alternatives considered for the fix:** run `git apply` with `--unsafe-paths` /
+`--directory` — rejected: both change how paths are *interpreted* without stopping the
+repo discovery that caused the misresolution, so the same silent skip remains reachable.
+`git -C <root>` or `--git-dir` — rejected: `-C` only sets cwd (which was already correct)
+and discovery still walks up from there; `--git-dir` would name a repo that doesn't exist,
+since the overlay deliberately isn't one. `git init` in each overlay to give it its own
+`.git` — rejected as the heaviest option: it makes every scratch dir a repo purely to
+satisfy a tool's discovery rule, and pollutes the very directory whose contents get
+diffed against ground truth. Checking `files_changed` non-empty as the success signal
+instead of the exit code — rejected as a *substitute* but adopted in spirit as a
+belt-and-suspenders check, below.
+
+**Fixed by** (commit `4ffbaa6`, PR #20) setting `GIT_CEILING_DIRECTORIES` to
+`repo_root`'s resolved parent, which stops git's upward discovery before it can ever reach
+an enclosing repo, regardless of how many levels up that repo lives. Plus treating
+`"Skipped patch"` in stdout as a failure regardless — that string is the exact symptom, and
+"the write never happened" must never be reported as `applied=True` again even by some
+other path. One subtlety cost a debugging cycle and is worth keeping: git resolves symlinks
+in its own cwd before comparing against `GIT_CEILING_DIRECTORIES`, so the cwd and the
+ceiling must both be `.resolve()`d from the same object — pairing a raw cwd with a resolved
+ceiling makes the ceiling silently fail to match under macOS's `/tmp` → `/private/tmp`
+symlink, and the whole fix no-ops exactly like the bug it fixes. Regression tests nest a
+real git repo around the overlay dir to reproduce the original failure mode directly.
+
+**What it invalidates.** Every `docs/results/*.md` and every `eval_results.db` row
+produced before the re-run in `a66a001`. D69 ("every real repair fixed nothing") is
+**refuted, not merely unproven** — its premise was that patches applied cleanly
+(`violations=[]`, `applied=True`) yet moved nothing, and the truth is they never applied
+at all. Post-fix, repairs plainly do move `pass_rate`. Phase 4's triage/classification
+claims are NOT affected: classification reads test failures, which never depended on
+patches landing.
+
+**What the first honest numbers look like** (k=3 seeds, post-fix, `a66a001`): `graph`
+`pass_rate` 0.266 → 0.431 with `full_green` 0.190; `t1_only` 0.266 → 0.396, so the
+codemods do real work once they actually reach disk; `iscc__iscc-core` went from an
+eternal 0.000 to 1.000, 3/3 seeds full green. Not all of it is flattering, which is the
+point: `eyurtsev__kor` DROPPED from 0.955 to 0.655 — with patches genuinely applying, the
+agent actively breaks a repo that was mostly passing. That regression was invisible for
+the entire project, because nothing was ever being written.
+
+**Interview:** "Every arm agreed to three decimal places, and I wrote that up as a finding
+instead of asking why seven different ablations would ever agree that precisely. The bug
+was that `git apply` resolves paths against the nearest enclosing `.git` rather than its
+cwd, so it silently skipped every patch and exited 0 — my code checked the exit code and
+believed it. What I'd take from it isn't 'check exit codes,' it's that a suspiciously
+clean result deserves the same scrutiny as a broken one. The uniformity WAS the evidence,
+pointing the other way, and it took me weeks to read it correctly. The fix also surfaced a
+real regression the bug had been hiding — one repo gets actively worse when the agent
+touches it."
 
 ---
 
