@@ -159,11 +159,9 @@ def test_every_shipped_config_loads_as_a_valid_eval_config() -> None:
     # only be caught by a live `make eval` run otherwise.
     configs_dir = Path(__file__).resolve().parents[2] / "configs"
     config_paths = sorted(configs_dir.glob("*.json"))
-    # 7 original arms + the 2 Groq-model variants (`no_t1_groq`, `embedding_groq`) added
-    # once Gemini's 20-requests/day quota (D48) left `no_t1` and `embedding` unable to
-    # make a single successful repair call. Bump this deliberately when adding an arm —
-    # it exists to catch a config file going MISSING, not to be kept in sync silently.
-    assert len(config_paths) == 9
+    # Bump this deliberately when adding an arm — it exists to catch a config file going
+    # MISSING, not to be kept in sync silently.
+    assert len(config_paths) == 7
 
     for path in config_paths:
         config = EvalConfig.from_dict(json.loads(path.read_text()))
