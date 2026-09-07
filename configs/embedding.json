@@ -1,6 +1,6 @@
 {
   "name": "embedding",
-  "model": "moonshotai/kimi-k3",
+  "model": "openai/gpt-oss-120b",
   "retrieval": "embedding",
   "tiers": [
     "T1",

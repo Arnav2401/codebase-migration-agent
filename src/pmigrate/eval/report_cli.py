@@ -22,11 +22,19 @@ this command would have reported their mean as a single "graph" number across tw
 different MODELS, which is a strictly worse version of the confound D74 already documents.
 Rows from superseded configurations stay in the store as history (D74 cites them); they
 are simply not mixed into a report describing the current one.
+
+`seed` is deliberately EXCLUDED from that identity comparison. It is part of `config_hash`
+(D63, so each seed resumes independently) but running the same arm under seeds 0/1/2 is one
+configuration measured k times, not three configurations -- the whole point of D72's k=3
+protocol. Matching on the full hash silently dropped seeds 1 and 2 from every report, which
+made a k=3 run indistinguishable from a k=1 run: caught immediately after D77 landed,
+when a 21-row `t1_only` sweep still reported 7 rows.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import typer
@@ -37,6 +45,12 @@ from pmigrate.eval.report import write_main_report
 from pmigrate.eval.store import ResultStore, config_hash, corpus_sha
 
 app = typer.Typer()
+
+
+def _identity(config: EvalConfig) -> str:
+    """`config_hash` with `seed` normalized away (D77). Seeds are repeated measurements of
+    ONE configuration, not different configurations, so they must not partition a report."""
+    return config_hash(replace(config, seed=0))
 
 
 @app.command()
@@ -53,11 +67,13 @@ def main(
     finally:
         store.close()
 
-    # D77: one config_hash per arm name -- whatever configs/<arm>.json says TODAY.
-    current_hash_by_arm = {}
+    # D77: one configuration identity per arm name -- whatever configs/<arm>.json says
+    # TODAY, compared with `seed` normalized away so a k=3 sweep (D72) counts as one
+    # configuration measured three times rather than three superseded ones.
+    current_identity_by_arm = {}
     for config_path in sorted(configs_dir.glob("*.json")):
         config = EvalConfig.from_dict(json.loads(config_path.read_text()))
-        current_hash_by_arm[config.name] = config_hash(config)
+        current_identity_by_arm[config.name] = _identity(config)
 
     results_by_config: dict[str, list[RepoResult]] = {}
     skipped = 0
@@ -65,7 +81,7 @@ def main(
         name = result.config.name
         # An arm with no config file at all (deleted since it was run) is dropped rather
         # than reported unqualified: there is no current configuration to say it describes.
-        if current_hash_by_arm.get(name) != config_hash(result.config):
+        if current_identity_by_arm.get(name) != _identity(result.config):
             skipped += 1
             continue
         results_by_config.setdefault(name, []).append(result)

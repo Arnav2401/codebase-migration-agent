@@ -1,6 +1,6 @@
 {
   "name": "no_t1",
-  "model": "moonshotai/kimi-k3",
+  "model": "openai/gpt-oss-120b",
   "retrieval": "graph",
   "tiers": [
     "T2",

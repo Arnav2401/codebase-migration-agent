@@ -1,6 +1,6 @@
 {
-  "name": "model_groq",
-  "model": "openai/gpt-oss-120b",
+  "name": "model_gemini",
+  "model": "gemini-3.6-flash",
   "retrieval": "graph",
   "tiers": [
     "T1",

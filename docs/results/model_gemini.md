@@ -1,13 +1,16 @@
-# Eval results — `wholefile`
+# Eval results — `model_gemini`
 
-> **Did not measure whole-file retrieval.** All 6 repair calls 429'd (0 applied, $0.00);
-> T1 alone ran, hence 0.396.
+> **The provider-contrast arm, renamed from `model_groq` and unmeasured this round.** With
+> the six ablation arms moved onto Groq, an arm named `model_groq` would have BEEN the
+> baseline rather than a contrast to it, so it was re-pointed at Gemini and renamed to say
+> what it runs — a stale name over a different provider is the label/behaviour mismatch this
+> project keeps getting caught by.
 >
-> phase-5-eval.md calls this the arm "a sharp interviewer will ask for" — does a naive
-> whole-file dump tie graph retrieval? **Still unmeasured, and now facing a prior problem:**
-> `graph` DID apply 5 patches this round and still landed on the same 0.396 as the no-LLM
-> arm (D78), so on current evidence there may be no pass-rate difference for ANY retrieval
-> strategy to make.
+> All 6 repair calls 429'd on Gemini's daily quota (0 applied, $0.00), so it reports T1
+> alone at 0.396. The cost/accuracy/latency frontier this arm exists to chart is unmeasured.
+> The earlier `model_groq` data (20 applied patches, $0.0116) is not shown here — different
+> configuration, correctly excluded by D77 — but it is what D78's cross-provider claim
+> rests on.
 
 **7 repos** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 

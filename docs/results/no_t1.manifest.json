@@ -1,8 +1,8 @@
 {
-  "agent_git_sha": "ecf479789dbc376f1e86fc28da5517549e501698",
+  "agent_git_sha": "81753c93e482191883b74875d292aa620249c854",
   "config": {
     "max_prompt_tokens": 40000,
-    "model": "moonshotai/kimi-k3",
+    "model": "openai/gpt-oss-120b",
     "name": "no_t1",
     "retrieval": "graph",
     "seed": 0,
@@ -14,12 +14,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788799623.616889,
-  "model": "moonshotai/kimi-k3",
+  "ended_at": 1788802511.834713,
+  "model": "openai/gpt-oss-120b",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
   "seed": 0,
-  "started_at": 1788799507.247401,
+  "started_at": 1788801878.731652,
   "temperature": 0
 }

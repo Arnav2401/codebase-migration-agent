@@ -96,7 +96,7 @@ corpus after you have numbers means re-running everything; treat it as a version
 - [ ] ≥30 repos (or a documented fallback in use), each with a recorded baseline pass set
 - [ ] Drop-reason histogram written to `docs/results/corpus.md`
 - [ ] Two runs of baseline capture produce identical pass sets (determinism check)
-- [ ] dev/test split assigned and stratified
+- [ ] dev/test split assigned and stratified — NOT DONE; all 7 corpus repos are `split="dev"` and zero are `"test"`. Blocks phase-5-eval.md's final acceptance criterion (docs/decisions.md D79).
 
 ## Pitfalls
 

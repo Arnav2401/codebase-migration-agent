@@ -1,14 +1,12 @@
 # Eval results — `embedding`
 
 > **Did not measure embedding retrieval. Do not cite as an embedding result.** All 6 repair
-> calls 429'd (0 applied) after NVIDIA's quota ran out mid-sweep, so the strategy under test
-> never fed a call that happened. Numbers are identical to `t1_only` (0.396, same per-repo
-> values, same diff-similarity) because T1 is all that ran.
+> calls 429'd (0 applied, $0.00). Numbers are identical to `t1_only` because T1 is all that
+> ran.
 >
-> The graph-vs-embedding comparison — phase-5-eval.md calls it "the resume claim" —
-> therefore remains **unmeasured**. And per D78 it now faces a prior problem: `graph`'s own
-> repairs moved pass_rate by zero this round, so on current evidence there may be no
-> pass-rate difference for either retrieval strategy to make.
+> The graph-vs-embedding comparison — phase-5-eval.md's "resume claim" — remains
+> **unmeasured** after five attempts across four providers. Per D78 it also faces the prior
+> problem that `graph`'s own repairs moved pass_rate by zero.
 
 **7 repos** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 

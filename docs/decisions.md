@@ -3745,6 +3745,48 @@ re-fixing the same failure rather than the model being incapable."
 
 ---
 
+## D79 — Phase 5's test-split criterion cannot be met: the corpus has no test split
+
+**Why:** `docs/phase-5-eval.md`'s final acceptance criterion is "Test split run **once**, at
+the end, and the number is whatever it is (I5)." Attempting it revealed there is nothing to
+run: all 7 repos in `corpus/manifest.json` carry `split="dev"` and **zero** carry
+`split="test"`. `RepoSpec.split` has supported `Literal["dev", "test"]` the whole time and
+nothing ever populated the second value.
+
+This is not a quota problem or a Phase 5 problem — it is Phase 0's own unchecked box.
+`docs/phase-0-corpus.md:99` still reads `- [ ] dev/test split assigned and stratified`.
+
+**What that means for the build-order rule.** CLAUDE.md is explicit that "Phase N+1 does not
+start until Phase N's criteria are demonstrably met." Phases 1–5 were built on a Phase 0
+whose split criterion was never satisfied, and nothing caught it for five phases because
+every command defaults to `--split dev` and a dev-only corpus answers those requests
+perfectly happily. The invariant that should have caught it (I5, "dev/test split respected")
+is trivially satisfiable by a corpus with no test half: the harness filtered correctly on a
+field that only ever held one value.
+
+**Alternatives:** relabel some existing dev repos as test — rejected, and this is the
+important one. Those 7 repos have been measured against, tuned against, and reasoned about
+in D69/D73/D74/D78 for the entire project. Promoting any of them to "held-out" now would
+produce a test number contaminated by everything already learned from them, which is worse
+than having no test number: it would LOOK like a held-out result and not be one. Run the
+test split with zero repos and report the empty result — rejected as meaningless ceremony.
+Defer the criterion and say so — accepted.
+
+**Status: Phase 5 cannot complete this criterion without Phase 0 work.** Closing it needs
+new repos discovered, baselined and stratified into a genuine held-out set (`corpus/discover.py`
+and `corpus/capture_baselines.py` already exist for exactly this), by someone who has not
+tuned against them. Recorded here rather than silently leaving the box unticked.
+
+**Interview:** "The last acceptance criterion was to run the held-out test split once, and
+I found there wasn't one — every repo in the corpus was labelled dev, going back to Phase 0
+whose own checklist still had that box unticked. What I find interesting is why it survived
+five phases: every command defaults to the dev split, and the invariant meant to protect the
+split is satisfied vacuously when only one value exists. The fix isn't to relabel some dev
+repos as test — I've been tuning against all seven for the whole project, so any 'held-out'
+number from them would be contaminated and, worse, would look legitimate."
+
+---
+
 ## Template
 
 ```

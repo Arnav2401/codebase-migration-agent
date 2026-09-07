@@ -166,3 +166,40 @@ def test_report_excludes_rows_from_a_superseded_configuration(tmp_path: Path) ->
     assert "acme__current" in content
     assert "acme__superseded" not in content
     assert "skipped 1 result(s) from superseded configurations" in result.output
+
+
+def test_report_keeps_every_seed_of_the_current_configuration(tmp_path: Path) -> None:
+    """docs/decisions.md D77, caught immediately after it landed: `seed` is part of
+    `config_hash` (D63) so each seed resumes independently, but seeds are one configuration
+    measured k times (D72), not k configurations. Matching on the full hash silently dropped
+    seeds 1 and 2, making a k=3 sweep report as if it were k=1."""
+    manifest_path = _manifest(tmp_path)
+    c_sha = corpus_sha(manifest_path)
+    results_db = tmp_path / "results.db"
+    store = ResultStore(results_db)
+
+    base = _result("acme__a")
+    for seed in (0, 1, 2):
+        seeded = replace(base, repo_id=f"acme__seed{seed}", config=replace(base.config, seed=seed))
+        store.save_result(seeded, c_sha, written_at=float(seed))
+    store.close()
+
+    out_path = tmp_path / "main.md"
+    result = runner.invoke(
+        app,
+        [
+            "--results-db",
+            str(results_db),
+            "--manifest-path",
+            str(manifest_path),
+            "--out-path",
+            str(out_path),
+            "--configs-dir",
+            str(_configs_dir(tmp_path, "graph")),  # declares seed=0 only
+        ],
+    )
+
+    content = out_path.read_text()
+    for seed in (0, 1, 2):
+        assert f"acme__seed{seed}" in content
+    assert "skipped" not in result.output

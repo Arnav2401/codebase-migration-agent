@@ -1,41 +1,46 @@
 # Eval results — main
 
-> **First sweep on fully valid machinery — and the headline is a null result
-> (docs/decisions.md D78).** Post-D73 (patches actually reach disk), post-D75 (prompt
-> budget, so zero 413s this round), scoped per-arm to one configuration (D77). Dev split,
-> k=1, six ablation arms on NVIDIA `moonshotai/kimi-k3` (D76) plus `model_groq` on Groq.
+> **Final Phase 5 dev-split state (docs/decisions.md D78/D79).** Machinery is now correct:
+> patches actually reach disk (D73), the prompt budget holds payloads under provider limits
+> (D75 — zero 413s), and each arm is reported against exactly one configuration (D77). Six
+> ablation arms run on Groq `openai/gpt-oss-120b`; `model_gemini` is the provider contrast.
 >
-> **Two arms genuinely exercised repair, and both landed on `t1_only`'s exact number:**
-> `graph` applied 4 patches, `model_groq` applied 20, and all three arms report mean
-> pass_rate **0.396**. Twenty-four patches applied cleanly across two independent providers
-> and two model families without moving a single repo's pass_rate. On this corpus T1's
-> deterministic codemods are doing all of the measurable work.
+> **The headline is a null result.** `graph` applied 5 real patches and scored mean
+> **0.396** — the exact number `t1_only` gets while never calling a model. Counting earlier
+> rounds on other providers, **29 applied patches across three providers have moved
+> pass_rate by zero** (D78). On this corpus the deterministic codemods do all the measurable
+> work, and the LLM repair tier — as currently prompted, targeted and validated — adds
+> nothing measurable on top.
 >
-> **Four arms still measured nothing of their own.** `no_t1`, `no_triage`, `wholefile` and
-> `embedding` had every repair call 429'd once NVIDIA's quota ran out mid-sweep, so they
-> report T1 alone — D74's failure mode recurring on a new provider. The retrieval and
-> triage ablations remain unmeasured, and identical numbers across those arms are the tell,
-> not a finding.
+> **Most ablations still did not run.** `no_triage`, `wholefile`, `embedding` and
+> `model_gemini` had every repair call 429'd; `no_t1` got exactly one through. Their
+> identical 0.396 rows are the signature of an unexercised ablation, not a result. Five
+> attempts across four providers (Gemini, Groq, OpenAI, NVIDIA) have not produced a sweep
+> where quota survived all seven arms — free-tier limits, not engineering, are the binding
+> constraint.
 >
-> **Reading the cost column needs care now.** For the six NVIDIA arms `usd_spent` is
-> structurally $0.00 whether repair ran or not (free-credit catalog, D76), so cost is NOT
-> the "did anything happen" signal there; repair counts in the per-arm files are. It still
-> works for `model_groq` ($0.0116, all on one repo).
+> **Seed variance (k=3) was measured only for `t1_only`**, where 7/7 repos were byte-identical
+> across seeds. That establishes the harness is deterministic; it says nothing about LLM
+> sampling, since that arm has no LLM.
 >
-> Per-repo highlights, stable across every round: `iscc__iscc-core` 0.000 → 1.000 under T1
-> alone; `eyurtsev__kor` 0.955 → 0.506, broken by T1 and not recovered by repair this
-> round; `SupImDos__pydantic-argparse` absorbed 24 applied patches across both providers
-> and never left 0.000.
+> **There is no test-split number and cannot be one yet: the corpus contains zero
+> `split="test"` repos** (D79). That is Phase 0's unticked box, not a Phase 5 omission, and
+> relabelling dev repos that have been tuned against for the whole project would produce a
+> contaminated number that merely looked held-out.
+>
+> Per-repo facts stable across every round: `iscc__iscc-core` 0.000 → 1.000 under T1 alone;
+> `eyurtsev__kor` 0.955 → 0.506, broken by a codemod and never recovered by repair;
+> `SupImDos__pydantic-argparse` absorbed 29 patches across providers and never left 0.000.
 >
 > Note for whoever regenerates this file: `report_cli` rewrites it from scratch, so this
-> caveat is hand-maintained and will vanish on the next run. D73–D78 are the durable record.
+> caveat is hand-maintained and will vanish on the next run. D73–D79 are the durable record.
 
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden. N is the number of distinct repos, not repo x seed cells, even for an arm run under multiple seeds (docs/decisions.md D72).
 
 > **These arms do not all run the same model — do not read across the split.** Each row differs from the others in more than the thing its name calls out, so a difference between two arms on opposite sides of the split confounds the ablation with the model change and measures neither. Compare only within a model:
 >
-> - `moonshotai/kimi-k3`: `embedding`, `graph`, `no_t1`, `no_triage`, `t1_only`, `wholefile`
-> - `openai/gpt-oss-120b`: `model_groq`
+> - `gemini-3.6-flash`: `model_gemini`
+> - `openai/gpt-oss-120b`: `embedding`, `graph`, `no_t1`, `no_triage`, `t1_only`, `wholefile`
 >
 > Why an arm runs the model it does varies, and this warning deliberately does NOT guess: an arm may name a second provider because comparing providers IS its ablation, or because the first one was rate-limited and the arm was re-run elsewhere to be measurable at all. Both produce the same table and the same hazard above.
 >
@@ -44,12 +49,12 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost | line_jaccard (mean [95% CI], n measured) | symbol_precision (mean [95% CI], n measured) | symbol_recall (mean [95% CI], n measured) |
 |---|---|---|---|---|---|---|---|
 | embedding | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
-| graph | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.217 [0.076, 0.373] (n=7/7) | 0.553 [0.355, 0.756] (n=7/7) | 0.626 [0.410, 0.817] (n=7/7) |
-| model_groq | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.217 [0.077, 0.373] (n=7/7) | 0.546 [0.340, 0.755] (n=7/7) | 0.621 [0.398, 0.817] (n=7/7) |
-| no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 | 0.000 [0.000, 0.000] (n=7/7) | 0.000 [0.000, 0.000] (n=7/7) | 0.000 [0.000, 0.000] (n=7/7) |
-| no_triage | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.188 [0.036, 0.357] (n=7/7) | 0.464 [0.214, 0.717] (n=7/7) | 0.512 [0.241, 0.766] (n=7/7) |
+| graph | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.218 [0.077, 0.373] (n=7/7) | 0.553 [0.355, 0.756] (n=7/7) | 0.626 [0.410, 0.817] (n=7/7) |
+| model_gemini | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
+| no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 | 0.001 [0.000, 0.002] (n=7/7) | 0.036 [0.000, 0.107] (n=7/7) | 0.005 [0.000, 0.016] (n=7/7) |
+| no_triage | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
 | t1_only | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
-| wholefile | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.137 [0.032, 0.267] (n=7/7) | 0.436 [0.213, 0.687] (n=7/7) | 0.506 [0.231, 0.755] (n=7/7) |
+| wholefile | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
 
 ## Per-repo appendix
 
@@ -70,19 +75,19 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 5 | 0.005 | 0.333 | 0.111 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0042 | 6 | 0.012 | 0.333 | 0.111 |
 | cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
 | eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
 | iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
 | madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
-### model_groq
+### model_gemini
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0116 | 21 | 0.010 | 0.286 | 0.074 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
 | cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
 | eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
 | iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
@@ -94,7 +99,7 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0009 | 2 | 0.005 | 0.250 | 0.037 |
 | cmudig__draco2 | 0.884 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
 | eyurtsev__kor | 0.955 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
 | iscc__iscc-core | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
@@ -108,7 +113,7 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
 | SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
 | cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
 | iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
 | madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
@@ -117,13 +122,13 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 [0.370, 0.370] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
 
 ### wholefile
 
@@ -134,5 +139,5 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
 | eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
 | iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
 | okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
