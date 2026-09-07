@@ -308,3 +308,121 @@ class GroqModelClient:
         return ModelResponse(
             text=text, usd_cost=usd_cost, tokens_in=tokens_in, tokens_out=tokens_out
         )
+
+
+NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
+
+# docs/decisions.md D76. NVIDIA's build catalog is free-credit development access, not
+# per-token billing, so there is no real price to record and 0.0 is the honest entry --
+# NOT a guess standing in for an unknown one. The consequence is load-bearing for reading
+# results: an NVIDIA arm's `usd_spent` is structurally $0.00 whether it repaired seven
+# repos or none, so for these arms cost CANNOT be used as the "did repair actually run"
+# tell that docs/results/main.md's own caveat leans on (D74). Repair outcomes
+# (applied/failed/skipped counts in the trace) are the signal there instead.
+_NVIDIA_PRICE_PER_TOKEN_USD: dict[str, dict[str, float]] = {
+    "moonshotai/kimi-k3": {"input": 0.0, "output": 0.0},
+    "deepseek-ai/deepseek-v4-pro-0813": {"input": 0.0, "output": 0.0},
+    "openai/gpt-oss-20b": {"input": 0.0, "output": 0.0},
+}
+
+
+@dataclass
+class NvidiaModelClient:
+    """Talks to NVIDIA's OpenAI-compatible build-catalog endpoint (docs/decisions.md D76)
+    — a THIRD real `ModelClient`, added when Gemini (daily quota, D48), Groq (token/day
+    limit) and OpenAI (zero credit balance) were all simultaneously exhausted and Phase 5
+    still had no arm that had genuinely exercised its own ablation (D74).
+
+    Deliberately near-identical to `GroqModelClient` (same OpenAI request shape, same
+    capped-retry policy from D49/D53) rather than sharing a base class: two concrete
+    clients was not enough duplication to justify an abstraction, and a third that differs
+    only in base URL, price table and one response quirk still isn't. Factoring these into
+    one `OpenAICompatibleClient` is the right move at four, or the moment they need to
+    diverge on anything real.
+    """
+
+    api_key: str
+    model: str = "moonshotai/kimi-k3"
+    # Same reasoning as both other clients: repair asks for the WHOLE corrected file (D25),
+    # so this scales with file size, not just thinking budget. This one skews higher still
+    # because kimi-k3 is a REASONING model -- verified live that max_tokens=16 returns
+    # finish_reason="stop" with content=None and all 37 completion tokens spent on
+    # reasoning_content, so a small budget yields a confidently empty answer, not an error.
+    max_output_tokens: int = 32768
+
+    _MAX_RETRIES: int = 3
+    _MAX_RETRY_DELAY_S: float = 30.0
+
+    @classmethod
+    def from_env(cls, model: str = "moonshotai/kimi-k3") -> NvidiaModelClient:
+        key = os.environ.get("NVIDIA_API_KEY")
+        if not key:
+            raise ValueError("NVIDIA_API_KEY not set")
+        return cls(api_key=key, model=model)
+
+    def _post_with_retry(self, system: str, prompt: str) -> requests.Response:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            # temperature=0 for the same I6 reproducibility reason as the other two
+            # clients. NOT the temperature=1 of NVIDIA's own catalog sample snippet:
+            # reproducibility is an invariant here, not a default to inherit.
+            "temperature": 0,
+            "max_tokens": self.max_output_tokens,
+            "stream": False,
+        }
+        for attempt in range(self._MAX_RETRIES + 1):
+            resp = requests.post(
+                f"{NVIDIA_API_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=body,
+                timeout=180,
+            )
+            if resp.status_code != 429 or attempt == self._MAX_RETRIES:
+                return resp
+            raw_delay = float(resp.headers.get("Retry-After", 2 * (attempt + 1)))
+            delay = min(raw_delay, self._MAX_RETRY_DELAY_S)
+            log.warning(
+                "model_client.rate_limited",
+                attempt=attempt,
+                retry_after_s=raw_delay,
+                sleeping_s=delay,
+            )
+            time.sleep(delay)
+        return resp  # unreachable — loop always returns on its last iteration
+
+    def complete(self, system: str, prompt: str) -> ModelResponse:
+        resp = self._post_with_retry(system, prompt)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+
+        usage = data.get("usage", {})
+        tokens_in = usage.get("prompt_tokens", 0)
+        tokens_out = usage.get("completion_tokens", 0)
+
+        price = _NVIDIA_PRICE_PER_TOKEN_USD.get(self.model)
+        if price is None:
+            raise ValueError(f"no pricing entry for model {self.model!r} — add one before using it")
+        usd_cost = tokens_in * price["input"] + tokens_out * price["output"]
+
+        choices = data.get("choices", [])
+        # `or ""`, not `.get("content", "")`: a reasoning model returns the key PRESENT and
+        # explicitly null when it spent its whole budget thinking, and a plain `.get`
+        # default only fires on a MISSING key -- so the default would pass None straight
+        # through and turn a clean ModelEmptyResponseError into a TypeError downstream.
+        # Verified live against kimi-k3 at max_tokens=16.
+        text = (choices[0].get("message", {}).get("content") or "") if choices else ""
+        if not text:
+            finish_reason = choices[0].get("finish_reason") if choices else "NO_CHOICES"
+            raise ModelEmptyResponseError(
+                f"NVIDIA returned no usable text (finish_reason={finish_reason!r}) — "
+                f"max_output_tokens={self.max_output_tokens} was likely consumed entirely "
+                "by reasoning before any visible output; raise max_output_tokens."
+            )
+
+        return ModelResponse(
+            text=text, usd_cost=usd_cost, tokens_in=tokens_in, tokens_out=tokens_out
+        )

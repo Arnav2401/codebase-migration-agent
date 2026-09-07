@@ -1,9 +1,14 @@
 {
   "name": "embedding",
-  "model": "gemini-3.6-flash",
+  "model": "moonshotai/kimi-k3",
   "retrieval": "embedding",
-  "tiers": ["T1", "T2", "T3"],
+  "tiers": [
+    "T1",
+    "T2",
+    "T3"
+  ],
   "triage": true,
   "seed": 0,
-  "usd_cap_per_repo": 5.0
+  "usd_cap_per_repo": 5.0,
+  "max_prompt_tokens": 40000
 }

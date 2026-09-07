@@ -2,7 +2,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pmigrate.agent.model_client import GeminiModelClient, GroqModelClient, ModelEmptyResponseError
+from pmigrate.agent.model_client import (
+    GeminiModelClient,
+    GroqModelClient,
+    ModelEmptyResponseError,
+    NvidiaModelClient,
+)
 
 
 def _response(status_code: int = 200, headers: dict | None = None, **json_body) -> MagicMock:  # type: ignore[no-untyped-def]
@@ -263,3 +268,76 @@ def test_groq_does_not_retry_on_a_non_429_error() -> None:
 
     assert mock_post.call_count == 1
     mock_sleep.assert_not_called()
+
+
+# --- NvidiaModelClient (docs/decisions.md D76) ---------------------------------------
+
+
+def test_nvidia_complete_returns_text_and_zero_cost_from_real_response_shape() -> None:
+    # the exact shape returned by a real call (verified live against moonshotai/kimi-k3
+    # before wiring this in). usd_cost is 0.0 because NVIDIA's build catalog is
+    # free-credit development access, not per-token billing -- see D76 on why that makes
+    # cost unusable as the "did repair run" tell for these arms.
+    body = {
+        "choices": [
+            {
+                "message": {"content": "ok", "reasoning_content": "thinking..."},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 91, "completion_tokens": 37},
+    }
+    client = NvidiaModelClient(api_key="test-key")
+    with patch("pmigrate.agent.model_client.requests.post", return_value=_response(**body)):
+        result = client.complete(system="sys", prompt="prompt")
+
+    assert result.text == "ok"
+    assert result.tokens_in == 91
+    assert result.tokens_out == 37
+    assert result.usd_cost == 0.0
+
+
+def test_nvidia_complete_raises_on_null_content_from_a_reasoning_model() -> None:
+    """The real quirk this client exists to survive (verified live at max_tokens=16):
+    kimi-k3 returns finish_reason="stop" with content explicitly NULL, having spent the
+    whole budget on reasoning_content. A `.get("content", "")` default does not fire for a
+    present-but-null key, so this must raise cleanly rather than pass None downstream."""
+    body = {
+        "choices": [
+            {
+                "message": {"content": None, "reasoning_content": "spent it all thinking"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 91, "completion_tokens": 37},
+    }
+    client = NvidiaModelClient(api_key="test-key", max_output_tokens=16)
+    with (
+        patch("pmigrate.agent.model_client.requests.post", return_value=_response(**body)),
+        pytest.raises(ModelEmptyResponseError),
+    ):
+        client.complete(system="sys", prompt="prompt")
+
+
+def test_nvidia_complete_raises_for_model_with_no_pricing_entry() -> None:
+    body = {
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+    client = NvidiaModelClient(api_key="test-key", model="nvidia/not-priced")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", return_value=_response(**body)),
+        pytest.raises(ValueError, match="no pricing entry"),
+    ):
+        client.complete(system="sys", prompt="prompt")
+
+
+def test_nvidia_from_env_reads_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NVIDIA_API_KEY", "env-key")
+    assert NvidiaModelClient.from_env().api_key == "env-key"
+
+
+def test_nvidia_from_env_raises_when_key_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="NVIDIA_API_KEY not set"):
+        NvidiaModelClient.from_env()

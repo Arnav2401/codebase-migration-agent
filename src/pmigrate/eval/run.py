@@ -55,7 +55,12 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 
-from pmigrate.agent.model_client import GeminiModelClient, GroqModelClient, ModelClient
+from pmigrate.agent.model_client import (
+    GeminiModelClient,
+    GroqModelClient,
+    ModelClient,
+    NvidiaModelClient,
+)
 from pmigrate.corpus.manifest_io import load_manifest
 from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.harness import DEFAULT_CLONE_CACHE_ROOT, run_corpus
@@ -80,6 +85,10 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "agent" / "prompts"
 _MODEL_CLIENT_FACTORIES: dict[str, Callable[[str], ModelClient]] = {
     "gemini-3.6-flash": lambda model: GeminiModelClient.from_env(model=model),
     "openai/gpt-oss-120b": lambda model: GroqModelClient.from_env(model=model),
+    # docs/decisions.md D76 -- NVIDIA's build catalog, added when all three other
+    # providers were exhausted at once. Registered per model id, same as the others.
+    "moonshotai/kimi-k3": lambda model: NvidiaModelClient.from_env(model=model),
+    "deepseek-ai/deepseek-v4-pro-0813": lambda model: NvidiaModelClient.from_env(model=model),
 }
 
 

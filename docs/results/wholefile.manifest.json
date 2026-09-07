@@ -1,7 +1,8 @@
 {
-  "agent_git_sha": "71a12ac5d0fb6c64efe56f10cc9e2fa6d29c3ce0",
+  "agent_git_sha": "ecf479789dbc376f1e86fc28da5517549e501698",
   "config": {
-    "model": "gemini-3.6-flash",
+    "max_prompt_tokens": 40000,
+    "model": "moonshotai/kimi-k3",
     "name": "wholefile",
     "retrieval": "wholefile",
     "seed": 0,
@@ -14,12 +15,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788611624.478192,
-  "model": "gemini-3.6-flash",
+  "ended_at": 1788799918.285834,
+  "model": "moonshotai/kimi-k3",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
   "seed": 0,
-  "started_at": 1788611405.575568,
+  "started_at": 1788799777.47929,
   "temperature": 0
 }

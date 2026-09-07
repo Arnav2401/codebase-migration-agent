@@ -3611,6 +3611,140 @@ truncated one means it hands you a truncated file back."
 
 ---
 
+## D76 — A third `ModelClient` (NVIDIA build catalog), because all three others died at once
+
+**Why:** Phase 5 needed one honest full sweep and had no provider to run it on. Gemini was
+429 on its daily quota (D48), Groq was 429 with `retry_after_s` up to 19594 (~5.4h, partly
+burned by my own payload probing, D75), and a supplied OpenAI key authenticated fine (HTTP
+200, 119 models) but returned `insufficient_quota` / `credit_balance_exhausted` on any
+inference call. NVIDIA's build catalog answered on the same corpus-sized prompts.
+
+**Alternatives:** wait for Groq's window and re-run — reasonable, and still the fallback,
+but it blocks on a clock rather than removing the single-provider dependency that has now
+stalled this phase three separate times. Extract an `OpenAICompatibleClient` base and have
+Groq/NVIDIA/OpenAI subclass it — rejected for now: `NvidiaModelClient` differs from
+`GroqModelClient` only in base URL, price table and one response quirk, and two near-copies
+was not enough duplication to justify the abstraction. A third still isn't; four is the
+point where the shared shape is real rather than coincidental.
+
+**Fixed by** `NvidiaModelClient` (`agent/model_client.py`), registered in `eval/run.py`'s
+`_MODEL_CLIENT_FACTORIES` for `moonshotai/kimi-k3` and `deepseek-ai/deepseek-v4-pro-0813`.
+Two things it does NOT copy from the vendor's own sample snippet: `temperature=1` (I6
+requires 0 for reproducibility — a default is not a reason to abandon an invariant) and
+`stream=True` (this project consumes whole responses).
+
+**The response quirk, verified live rather than guessed:** at `max_tokens=16` kimi-k3
+returns `finish_reason="stop"` with `content` explicitly **null**, having spent all 37
+completion tokens on `reasoning_content`. `GroqModelClient`'s `.get("content", "")` idiom
+would pass that `None` straight through, because a `.get` default only fires on a MISSING
+key, not a present-and-null one — turning a clean `ModelEmptyResponseError` into a
+`TypeError` deep in `repair()`. This client uses `or ""`, and a regression test pins it.
+
+**Cost reporting is structurally broken for this provider, and that matters.** NVIDIA's
+build catalog is free-credit development access, not per-token billing, so the price table
+records a true 0.0 rather than a guess. The consequence: an NVIDIA arm's `usd_spent` is
+$0.00 whether it repaired seven repos or none — so for these arms, cost CANNOT serve as the
+"did repair actually run" tell that `docs/results/main.md`'s own caveat leans on (D74).
+Repair outcome counts in the trace are the signal instead.
+
+**Interview:** "Three providers hit their limits within an hour of each other, which is
+its own finding about building on free tiers. Adding the fourth took twenty minutes because
+the client boundary was already the right shape — but the interesting part was a null. The
+model is a reasoning model, and when it spends its whole budget thinking it returns
+`finish_reason: stop` with content set to null, not missing. The existing client used
+`.get(\'content\', \'\')`, and a default only fires on a missing key, so that would have
+propagated a None into the repair path as a TypeError instead of the clean empty-response
+error the code already knew how to handle."
+
+---
+
+## D77 — Reports are scoped to each arm's CURRENT config, not just its name
+
+**Why:** found live, and it would have silently produced the worst number this project has
+yet printed. `report_cli` grouped stored results by `config.name`. When the six ablation
+arms were re-pointed at NVIDIA (D76), the store still held 21 Gemini rows per arm from the
+k=3 sweep, so `graph` had 28 rows spanning **two different models** — and the headline
+table would have reported their mean as a single "graph" pass_rate. `corpus_sha` scoping
+(already present) does not catch this: the corpus never changed, the configuration did.
+
+That is strictly worse than D74's blend, which at least averaged one pipeline against a
+degenerate version of itself. This would average two different models under a name that
+mentions neither.
+
+**Alternatives:** delete superseded rows from the store — rejected: they are real
+measurements and D74 cites them; a report should narrow what it *shows*, not destroy
+history. Group by `(name, config_hash)` and print every configuration as its own row —
+rejected: it makes the headline table grow without bound as configs are tuned, and the
+question a reader has is "what does this arm do now," not "what has it ever done."
+
+**Fixed by** loading `configs/*.json` at report time, computing each arm's current
+`config_hash`, and keeping only rows that match — reporting how many were skipped rather
+than dropping them silently. On the first real run this printed `skipped 147 result(s) from
+superseded configurations`, which is exactly the number of pre-D76 rows.
+
+**Interview:** "The store is keyed by config hash so resumability is exact, but the report
+grouped by arm NAME — so the moment I re-pointed six arms at a different model, the store
+had two configurations under each name and the report would have averaged across them. The
+fix is that a report describes one configuration per arm, and says out loud how many rows
+it excluded. The general lesson is that a cache key and a reporting key are different
+things, and using the looser one for reporting is how you get a number nobody can defend."
+
+---
+
+## D78 — On valid data, 24 applied repairs across two providers moved `pass_rate` by zero
+
+**This is D69's claim, re-established on data that is actually trustworthy.** D69 was
+refuted by D73 because its repairs never reached disk. This round's did — post-D73
+`apply_patch`, post-D75 prompt budget, verified by `repair_applied` events with real token
+counts and by `git diff`-visible overlay changes.
+
+**The measurement.** Dev split, k=1, seven arms, one corpus. Two arms genuinely exercised
+repair:
+
+| arm | provider | repairs applied | repair failures | mean pass_rate |
+|---|---|---|---|---|
+| `graph` | NVIDIA kimi-k3 | 4 | 6 (timeouts/429) | 0.396 |
+| `model_groq` | Groq gpt-oss-120b | **20** | 5 | 0.396 |
+| `t1_only` | none (codemods only) | — | — | **0.396** |
+
+Both repair arms landed on `t1_only`'s number exactly. Twenty-four patches applied cleanly
+across two independent providers and two model families, and not one changed a single
+repo's `pass_rate`. The per-repo tables are identical to `t1_only`'s row for row, with one
+exception that makes the point sharper rather than softer: `SupImDos__pydantic-argparse`
+absorbed 4 applied patches over 5 iterations under NVIDIA and 20 over 21 iterations under
+Groq, and sat at `0.000` in both.
+
+**What this is NOT evidence for.** Four of the seven arms (`no_t1`, `no_triage`,
+`wholefile`, `embedding`) were 429'd on every repair call and contributed nothing —
+D74's problem recurring on a new provider, so the retrieval and triage ablations remain
+unmeasured. And k=1 means no seed variance here at all. This finding is about repair's
+EFFECT, which two arms did measure, not about the ablations, which mostly did not.
+
+**Why it is now worth taking seriously anyway.** The two prior times this pattern appeared
+it had an available excuse — first a no-op bug (D73), then quota degeneracy (D74). This
+time patches demonstrably landed, the providers were independent, and the volume was 24
+rather than a handful. The honest reading is that T1's deterministic codemods are doing
+essentially all of the measurable work on this corpus, and the LLM repair tier — as
+currently prompted, targeted, and validated — is not adding measurable pass-rate on top.
+
+**The most probable explanations, none yet tested.** (a) Target selection: repair fixes the
+file the traceback names, which may be downstream of the actual defect. (b) The repos that
+still fail may need multi-file coordinated changes that a single-file rewrite cannot
+express. (c) `SupImDos`'s 21 iterations suggest the loop can churn — applying a patch,
+re-running, finding the same class of failure — without converging, which would mean the
+no-progress detector is not catching a real stall. (c) is the cheapest to check next and
+would be the most damning.
+
+**Interview:** "The headline is that the codemods do all the measurable work and the LLM
+tier adds nothing on top — twenty-four patches, two providers, zero pass-rate movement. I'd
+believed a version of that before and been wrong, because the patches were silently not
+applying. So the thing I'd defend isn't the conclusion, it's that the third time I found
+this pattern I could prove the patches actually landed. And it points somewhere specific:
+one repo took twenty-one iterations without converging, which smells like the loop
+re-fixing the same failure rather than the model being incapable."
+
+---
+
 ## Template
 
 ```

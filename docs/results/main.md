@@ -1,44 +1,40 @@
 # Eval results — main
 
-> **These are the first valid numbers this project has ever produced (2026-09-07).
-> Every result predating them is void — see docs/decisions.md D73.** `apply_patch` was
-> silently no-op'ing every T1 codemod and every T2/T3 repair: `git apply` resolved diff
-> paths against this project's own enclosing `.git` rather than the scratch overlay,
-> printed `Skipped patch` to stdout, exited 0, and the harness recorded `applied=True`
-> with nothing written to disk. Every earlier run measured the untouched baseline, which
-> is why all seven arms used to report identical per-repo pass rates (mean 0.266
-> everywhere, zero repos full green, diff-similarity exactly 0.000 across the board).
-> Seven ablations agreeing to three decimal places was the bug announcing itself.
+> **First sweep on fully valid machinery — and the headline is a null result
+> (docs/decisions.md D78).** Post-D73 (patches actually reach disk), post-D75 (prompt
+> budget, so zero 413s this round), scoped per-arm to one configuration (D77). Dev split,
+> k=1, six ablation arms on NVIDIA `moonshotai/kimi-k3` (D76) plus `model_groq` on Groq.
 >
-> **Second, and just as important: do not read the arm means in the table below.**
-> Gemini's quota died partway through the k=3 sweep, so an arm's three seeds did not run
-> the same pipeline — `graph` seed 0 bought repair on 4/7 repos (mean 0.499) while seeds 1
-> and 2 bought none and silently degenerated into `t1_only` (0.396 each). Its headline
-> 0.431 is the average of those, describing no pipeline that exists. Worse, `embedding`,
-> `no_triage`, and `t1_only` are numerically *identical* to each other because all three
-> measured T1 and nothing else, and `no_t1` ran nothing at all. Only `graph` (seed 0) and
-> `model_groq` exercised anything, and only `model_groq` did so consistently across seeds.
-> The per-arm files say which is which; docs/decisions.md D74 has the full accounting.
+> **Two arms genuinely exercised repair, and both landed on `t1_only`'s exact number:**
+> `graph` applied 4 patches, `model_groq` applied 20, and all three arms report mean
+> pass_rate **0.396**. Twenty-four patches applied cleanly across two independent providers
+> and two model families without moving a single repo's pass_rate. On this corpus T1's
+> deterministic codemods are doing all of the measurable work.
 >
-> **The two results that do survive**, both from `graph` seed 0 read against `t1_only` and
-> `no_t1`, are per-repo rather than per-arm:
-> - `eyurtsev__kor` — untouched 0.955, T1 alone 0.506, T1+repair 0.955. **T1's codemod
->   breaks this repo and the LLM tier's job here is undoing it.** (An earlier version of
->   this note had that backwards, reading a 0.955 → 0.655 "drop" off the blended mean.)
-> - `cmudig__draco2` — untouched 0.884, T1 alone 0.878, T1+repair **1.000**. Repair
->   reaches full green where the codemods cannot.
+> **Four arms still measured nothing of their own.** `no_t1`, `no_triage`, `wholefile` and
+> `embedding` had every repair call 429'd once NVIDIA's quota ran out mid-sweep, so they
+> report T1 alone — D74's failure mode recurring on a new provider. The retrieval and
+> triage ablations remain unmeasured, and identical numbers across those arms are the tell,
+> not a finding.
 >
-> `iscc__iscc-core` goes 0.000 → 1.000 under T1 alone, in every arm — a clean codemod win
-> that repair deserves no credit for.
+> **Reading the cost column needs care now.** For the six NVIDIA arms `usd_spent` is
+> structurally $0.00 whether repair ran or not (free-credit catalog, D76), so cost is NOT
+> the "did anything happen" signal there; repair counts in the per-arm files are. It still
+> works for `model_groq` ($0.0116, all on one repo).
+>
+> Per-repo highlights, stable across every round: `iscc__iscc-core` 0.000 → 1.000 under T1
+> alone; `eyurtsev__kor` 0.955 → 0.506, broken by T1 and not recovered by repair this
+> round; `SupImDos__pydantic-argparse` absorbed 24 applied patches across both providers
+> and never left 0.000.
 >
 > Note for whoever regenerates this file: `report_cli` rewrites it from scratch, so this
-> caveat is hand-maintained and will vanish on the next run. D73/D74 are the durable record.
+> caveat is hand-maintained and will vanish on the next run. D73–D78 are the durable record.
 
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden. N is the number of distinct repos, not repo x seed cells, even for an arm run under multiple seeds (docs/decisions.md D72).
 
 > **These arms do not all run the same model — do not read across the split.** Each row differs from the others in more than the thing its name calls out, so a difference between two arms on opposite sides of the split confounds the ablation with the model change and measures neither. Compare only within a model:
 >
-> - `gemini-3.6-flash`: `embedding`, `graph`, `no_t1`, `no_triage`, `t1_only`, `wholefile`
+> - `moonshotai/kimi-k3`: `embedding`, `graph`, `no_t1`, `no_triage`, `t1_only`, `wholefile`
 > - `openai/gpt-oss-120b`: `model_groq`
 >
 > Why an arm runs the model it does varies, and this warning deliberately does NOT guess: an arm may name a second provider because comparing providers IS its ablation, or because the first one was rate-limited and the arm was re-run elsewhere to be measurable at all. Both produce the same table and the same hazard above.
@@ -48,12 +44,12 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost | line_jaccard (mean [95% CI], n measured) | symbol_precision (mean [95% CI], n measured) | symbol_recall (mean [95% CI], n measured) |
 |---|---|---|---|---|---|---|---|
 | embedding | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
-| graph | 7 | 0.431 [0.137, 0.739] | 0.190 [0.000, 0.476] | $0.04 | 0.217 [0.069, 0.382] (n=7/7) | 0.540 [0.321, 0.759] (n=7/7) | 0.614 [0.397, 0.810] (n=7/7) |
-| model_groq | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.01 | 0.219 [0.081, 0.374] (n=7/7) | 0.543 [0.333, 0.755] (n=7/7) | 0.658 [0.495, 0.818] (n=7/7) |
+| graph | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.217 [0.076, 0.373] (n=7/7) | 0.553 [0.355, 0.756] (n=7/7) | 0.626 [0.410, 0.817] (n=7/7) |
+| model_groq | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.217 [0.077, 0.373] (n=7/7) | 0.546 [0.340, 0.755] (n=7/7) | 0.621 [0.398, 0.817] (n=7/7) |
 | no_t1 | 7 | 0.266 [0.003, 0.549] | 0.000 [0.000, 0.000] | $0.00 | 0.000 [0.000, 0.000] (n=7/7) | 0.000 [0.000, 0.000] (n=7/7) | 0.000 [0.000, 0.000] (n=7/7) |
-| no_triage | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
+| no_triage | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.188 [0.036, 0.357] (n=7/7) | 0.464 [0.214, 0.717] (n=7/7) | 0.512 [0.241, 0.766] (n=7/7) |
 | t1_only | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |
-| wholefile | 7 | 0.404 [0.132, 0.700] | 0.143 [0.000, 0.429] | $0.00 | 0.217 [0.075, 0.374] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.617 [0.386, 0.820] (n=7/7) |
+| wholefile | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.137 [0.032, 0.267] (n=7/7) | 0.436 [0.213, 0.687] (n=7/7) | 0.506 [0.231, 0.755] (n=7/7) |
 
 ## Per-repo appendix
 
@@ -61,82 +57,82 @@ Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling R
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 [0.370, 0.370] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
 ### graph
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.2005 | 5.3 | 0.002 | 0.216 | 0.074 |
-| cmudig__draco2 | 0.918 [0.878, 1.000] (k=3 seeds) | 1/3 | 0.0214 | 2.0 | 0.502 | 0.815 | 0.667 |
-| eyurtsev__kor | 0.655 [0.506, 0.955] (k=3 seeds) | 0/3 | 0.0633 | 1.3 | 0.163 | 0.522 | 0.636 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.420 [0.370, 0.519] (k=3 seeds) | 0/3 | 0.0286 | 1.7 | 0.554 | 0.734 | 0.778 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 5 | 0.005 | 0.333 | 0.111 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
 ### model_groq
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0426 | 16.3 | 0.023 | 0.267 | 0.333 |
-| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 [0.370, 0.370] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0116 | 21 | 0.010 | 0.286 | 0.074 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
 ### no_t1
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| cmudig__draco2 | 0.884 [0.884, 0.884] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| eyurtsev__kor | 0.955 [0.955, 0.955] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| iscc__iscc-core | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| madkote__fastapi-plugins | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.000 | 0.000 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| cmudig__draco2 | 0.884 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| eyurtsev__kor | 0.955 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| iscc__iscc-core | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| madkote__fastapi-plugins | 0.000 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
 
 ### no_triage
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 [0.370, 0.370] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
 ### t1_only
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 [0.370, 0.370] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
 
 ### wholefile
 
 | repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
 |---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.420 [0.370, 0.519] (k=3 seeds) | 0/3 | 0.0145 | 1.7 | 0.554 | 0.734 | 0.778 |
-| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.000 | 0.000 | 0.000 |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
