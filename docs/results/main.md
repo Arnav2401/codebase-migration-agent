@@ -2,6 +2,15 @@
 
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden. N is the number of distinct repos, not repo x seed cells, even for an arm run under multiple seeds (docs/decisions.md D72).
 
+> **These arms do not all run the same model — do not read across the split.** Each row differs from the others in more than the thing its name calls out, so a difference between two arms on opposite sides of the split confounds the ablation with the model change and measures neither. Compare only within a model:
+>
+> - `gemini-3.6-flash`: `embedding`, `graph`, `no_t1`, `no_triage`, `t1_only`, `wholefile`
+> - `openai/gpt-oss-120b`: `model_groq`
+>
+> Why an arm runs the model it does varies, and this warning deliberately does NOT guess: an arm may name a second provider because comparing providers IS its ablation, or because the first one was rate-limited and the arm was re-run elsewhere to be measurable at all. Both produce the same table and the same hazard above.
+>
+> Separately, and load-bearing for reading ANY row here: Gemini's free tier on this project is 20 requests/day and trickle-refills rather than resetting cleanly (docs/decisions.md D48), so an arm can score every one of its cells while every single repair call returns 429. Such an arm reports real test outcomes but no real repair activity — its numbers are T1's deterministic codemod alone, not the tier or retrieval strategy its name describes. The tell is the cost column: a near-zero spend next to a full N means nothing was actually repaired, and that row is measuring T1, whatever its name says.
+
 | arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost | line_jaccard (mean [95% CI], n measured) | symbol_precision (mean [95% CI], n measured) | symbol_recall (mean [95% CI], n measured) |
 |---|---|---|---|---|---|---|---|
 | embedding | 7 | 0.396 [0.128, 0.697] | 0.143 [0.000, 0.429] | $0.00 | 0.216 [0.075, 0.373] (n=7/7) | 0.541 [0.328, 0.753] (n=7/7) | 0.616 [0.384, 0.817] (n=7/7) |

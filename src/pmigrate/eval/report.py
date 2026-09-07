@@ -219,21 +219,29 @@ def _model_split_caveat(results_by_config: dict[str, list[RepoResult]]) -> list[
         "Each row differs from the others in more than the thing its name calls out, so a "
         "difference between two arms on opposite sides of the split confounds the "
         "ablation with the model change and measures neither. Compare only within a model:",
-        "",
+        ">",
     ]
     for model in sorted(distinct_models):
         arms = sorted(name for name, models in models_by_arm.items() if model in models)
         lines.append(f"> - `{model}`: {', '.join(f'`{a}`' for a in arms)}")
-    lines.append("> ")
+    lines.append(">")
     lines.append(
-        "> The split is not a design choice — it is a quota artifact. Gemini's free tier "
-        "here is 20 requests/day and trickle-refills rather than resetting cleanly "
-        "(docs/decisions.md D48), which left some arms fully rate-limited with every "
-        "repair call returning 429. Those arms were re-run against Groq, which has orders "
-        "of magnitude more headroom, so that the ablation they encode could be measured at "
-        "all. An arm whose Gemini run was fully quota-blocked reports real test outcomes "
-        "but no real repair activity — its numbers reflect T1's deterministic codemod "
-        "alone, not the tier or retrieval strategy its name describes."
+        "> Why an arm runs the model it does varies, and this warning deliberately does "
+        "NOT guess: an arm may name a second provider because comparing providers IS its "
+        "ablation, or because the first one was rate-limited and the arm was re-run "
+        "elsewhere to be measurable at all. Both produce the same table and the same "
+        "hazard above."
+    )
+    lines.append(">")
+    lines.append(
+        "> Separately, and load-bearing for reading ANY row here: Gemini's free tier on "
+        "this project is 20 requests/day and trickle-refills rather than resetting cleanly "
+        "(docs/decisions.md D48), so an arm can score every one of its cells while every "
+        "single repair call returns 429. Such an arm reports real test outcomes but no "
+        "real repair activity — its numbers are T1's deterministic codemod alone, not the "
+        "tier or retrieval strategy its name describes. The tell is the cost column: a "
+        "near-zero spend next to a full N means nothing was actually repaired, and that "
+        "row is measuring T1, whatever its name says."
     )
     return lines
 
