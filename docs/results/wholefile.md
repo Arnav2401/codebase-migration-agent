@@ -1,29 +1,17 @@
 # Eval results — `wholefile`
 
-> **Full-matrix re-run 2026-09-05, right after `graph` in the same coordinated matrix
-> run.** `clone_cache/` was already fully populated from `graph`'s run — zero clone
-> timeouts, zero remote clone traffic at all for this arm (every checkout was a local
-> clone from the cache). Confirms D70's fix generalizes across arms, not just the one
-> that happens to populate the cache first.
->
-> Real signal: `Aiven-Open__rohmu` got a real `repair_applied` on two files
-> (`fix_class_def`) with zero effect on `pass_rate`. `iscc__iscc-core` reproduced its
-> `repair_rejected` corrupt-patch failure again (twice) — now seen in every arm that's
-> gotten a real attempt this round. `madkote__fastapi-plugins` got two more real repairs,
-> still zero effect. `SupImDos__pydantic-argparse`, `okfn__opendataeditor`, and
-> `cmudig__draco2` each hit a 120s Gemini read timeout instead of quota or rejection.
-> Real total cost: $0.15.
-
-**7 repos** — 0 full green, mean pass rate 0.266, total cost $0.15
+**7 repos (21 repo x seed runs)** — 1 full green (every seed passed), mean pass rate 0.404, total cost $0.01
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
-| repo_id | pass_rate | full_green | usd_spent | iterations |
-|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0414 | 2 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 |
-| cmudig__draco2 | 0.884 | False | 0.0000 | 1 |
-| eyurtsev__kor | 0.955 | False | 0.0000 | 1 |
-| iscc__iscc-core | 0.000 | False | 0.0741 | 3 |
-| madkote__fastapi-plugins | 0.000 | False | 0.0385 | 2 |
-| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 |
+Diff-similarity (docs/phase-5-eval.md): 0.217 [0.075, 0.378] (n=7/7) line jaccard, 0.541 [0.330, 0.756] (n=7/7) symbol precision, 0.617 [0.381, 0.814] (n=7/7) symbol recall. `—` per repo below means not measured (no human ground-truth diff, or neither side touched a Python file), not a real 0.0.
+
+| repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
+|---|---|---|---|---|---|---|---|
+| Aiven-Open__rohmu | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.009 | 0.241 | 0.778 |
+| SupImDos__pydantic-argparse | 0.000 [0.000, 0.000] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.000 | 0.250 | 0.037 |
+| cmudig__draco2 | 0.878 [0.878, 0.878] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.464 | 0.778 | 0.636 |
+| eyurtsev__kor | 0.506 [0.506, 0.506] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.197 | 0.533 | 0.727 |
+| iscc__iscc-core | 1.000 [1.000, 1.000] (k=3 seeds) | 3/3 | 0.0000 | 1.0 | 0.059 | 0.250 | 1.000 |
+| madkote__fastapi-plugins | 0.420 [0.370, 0.519] (k=3 seeds) | 0/3 | 0.0145 | 1.7 | 0.554 | 0.734 | 0.778 |
+| okfn__opendataeditor | 0.022 [0.022, 0.022] (k=3 seeds) | 0/3 | 0.0000 | 1.0 | 0.233 | 1.000 | 0.364 |

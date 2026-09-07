@@ -2,11 +2,10 @@
   "agent_git_sha": "d203bae64b1b76720a3f149d0d37a1c6331d88a1",
   "config": {
     "model": "gemini-3.6-flash",
-    "name": "graph",
+    "name": "no_t1",
     "retrieval": "graph",
-    "seed": 2,
+    "seed": 1,
     "tiers": [
-      "T1",
       "T2",
       "T3"
     ],
@@ -14,12 +13,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788769386.506648,
+  "ended_at": 1788780022.1331441,
   "model": "gemini-3.6-flash",
   "prompt_hashes": {
     "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
   },
-  "seed": 2,
-  "started_at": 1788769326.148015,
+  "seed": 1,
+  "started_at": 1788779982.145472,
   "temperature": 0
 }
