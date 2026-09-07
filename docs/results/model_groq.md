@@ -1,5 +1,27 @@
 # Eval results — `model_groq`
 
+> **The one arm whose three seeds are genuinely comparable — and the control that proves
+> the others' "seed variance" was quota.** Post-D73. Groq's limits held where Gemini's did
+> not, so all three seeds spent about the same ($0.0139 / $0.0140 / $0.0147) and scored
+> identically. Compare `graph`, whose seed 0 spent $0.31 and whose seeds 1 and 2 spent
+> nothing at all: that arm's spread is a quota schedule, this arm's flatness is what an
+> actually-repeated measurement looks like (docs/decisions.md D74).
+>
+> **But coverage is thin: only 1 of 7 repos (`SupImDos__pydantic-argparse`) got a repair
+> call through** — the rest have historically hit Groq's `413 Payload Too Large` on this
+> corpus. With six repos unrepaired, the arm mean 0.396 is again just `t1_only`'s number.
+>
+> **The one real cross-provider result, and it is a negative one.**
+> `SupImDos__pydantic-argparse` sits at `pass_rate=0.000` under Groq ($0.0139) *and* under
+> Gemini in `graph` ($0.2005 — the single most expensive repo of the round). Two
+> providers, real patches genuinely applied post-D73, no movement either way. This is the
+> one piece of the old D69 claim ("repairs land and change nothing") that survives onto
+> valid data — narrowed from "every repair" to "this repo resists both providers," which
+> is a much smaller but actually supported claim.
+>
+> Not a provider comparison: `graph` bought repair on 4 repos and this arm on 1, so any
+> delta between them measures how much quota each got, not Gemini vs Groq.
+
 **7 repos (21 repo x seed runs)** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.04
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).

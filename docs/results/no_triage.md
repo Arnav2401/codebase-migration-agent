@@ -1,5 +1,18 @@
 # Eval results — `no_triage`
 
+> **This arm did not measure the triage ablation. Do not cite it as evidence for or
+> against Phase 4.** All 21 cells spent **$0.00** — every repair call was quota-blocked
+> (D48). Triage decides *which* failure a repair call targets, so with no repair call
+> reaching a model there was nothing for `triage=False` to change. What ran was T1 alone,
+> which is why this file is numerically *identical* to `t1_only` (mean 0.396, same
+> per-repo values, same diff-similarity). That identity is the tell of an unexercised
+> ablation, not a result (docs/decisions.md D74).
+>
+> Phase 4's justification — the reason this arm exists — is therefore still unmeasured
+> post-D73. Note this is a weaker outcome than earlier quota-blocked rounds, which at
+> least caught `eyurtsev__kor` taking the distinct `repair_no_target` code path; this
+> round's cells did not get far enough to produce even that.
+
 **7 repos (21 repo x seed runs)** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).

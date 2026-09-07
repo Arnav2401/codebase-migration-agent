@@ -10,15 +10,29 @@
 > everywhere, zero repos full green, diff-similarity exactly 0.000 across the board).
 > Seven ablations agreeing to three decimal places was the bug announcing itself.
 >
-> What changed once patches actually landed: `t1_only` 0.266 → 0.396 (the codemods do
-> real work), `graph` 0.266 → 0.431 with `full_green` 0.190, and `iscc__iscc-core` went
-> from an eternal 0.000 to 1.000, full green on all 3 seeds. It is not all good news, and
-> that is the useful part: `eyurtsev__kor` DROPPED from 0.955 to 0.655 — the agent
-> actively breaks a repo that was mostly passing, a regression the no-op bug had hidden
-> for the project's entire history.
+> **Second, and just as important: do not read the arm means in the table below.**
+> Gemini's quota died partway through the k=3 sweep, so an arm's three seeds did not run
+> the same pipeline — `graph` seed 0 bought repair on 4/7 repos (mean 0.499) while seeds 1
+> and 2 bought none and silently degenerated into `t1_only` (0.396 each). Its headline
+> 0.431 is the average of those, describing no pipeline that exists. Worse, `embedding`,
+> `no_triage`, and `t1_only` are numerically *identical* to each other because all three
+> measured T1 and nothing else, and `no_t1` ran nothing at all. Only `graph` (seed 0) and
+> `model_groq` exercised anything, and only `model_groq` did so consistently across seeds.
+> The per-arm files say which is which; docs/decisions.md D74 has the full accounting.
+>
+> **The two results that do survive**, both from `graph` seed 0 read against `t1_only` and
+> `no_t1`, are per-repo rather than per-arm:
+> - `eyurtsev__kor` — untouched 0.955, T1 alone 0.506, T1+repair 0.955. **T1's codemod
+>   breaks this repo and the LLM tier's job here is undoing it.** (An earlier version of
+>   this note had that backwards, reading a 0.955 → 0.655 "drop" off the blended mean.)
+> - `cmudig__draco2` — untouched 0.884, T1 alone 0.878, T1+repair **1.000**. Repair
+>   reaches full green where the codemods cannot.
+>
+> `iscc__iscc-core` goes 0.000 → 1.000 under T1 alone, in every arm — a clean codemod win
+> that repair deserves no credit for.
 >
 > Note for whoever regenerates this file: `report_cli` rewrites it from scratch, so this
-> caveat is hand-maintained and will vanish on the next run. D73 is the durable record.
+> caveat is hand-maintained and will vanish on the next run. D73/D74 are the durable record.
 
 Bootstrap 95% CIs (docs/decisions.md D65): 10000 resamples, seed=0, resampling REPOS within each arm — not a normal-approximation interval, since a few dozen repos is a small, plausibly non-normal sample. A narrow N means a wide interval; that width is reported here rather than hidden. N is the number of distinct repos, not repo x seed cells, even for an arm run under multiple seeds (docs/decisions.md D72).
 

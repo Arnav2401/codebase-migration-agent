@@ -3449,13 +3449,29 @@ at all. Post-fix, repairs plainly do move `pass_rate`. Phase 4's triage/classifi
 claims are NOT affected: classification reads test failures, which never depended on
 patches landing.
 
-**What the first honest numbers look like** (k=3 seeds, post-fix, `a66a001`): `graph`
-`pass_rate` 0.266 → 0.431 with `full_green` 0.190; `t1_only` 0.266 → 0.396, so the
-codemods do real work once they actually reach disk; `iscc__iscc-core` went from an
-eternal 0.000 to 1.000, 3/3 seeds full green. Not all of it is flattering, which is the
-point: `eyurtsev__kor` DROPPED from 0.955 to 0.655 — with patches genuinely applying, the
-agent actively breaks a repo that was mostly passing. That regression was invisible for
-the entire project, because nothing was ever being written.
+**What the first honest numbers look like** (k=3 seeds, post-fix, `a66a001`): `t1_only`
+`pass_rate` 0.266 → 0.396, so the codemods do real work once they actually reach disk, and
+`iscc__iscc-core` went from an eternal 0.000 to a full-green 1.000 under T1 alone.
+
+Two per-repo results are worth more than any arm mean here, and both need the arms read
+against each other rather than a single row (see D74 for why the arm means themselves are
+not usable):
+
+- **`eyurtsev__kor`: T1 BREAKS it and repair puts it back.** `no_t1` (T1 disabled, no
+  repair) leaves it at its untouched 0.955; `t1_only` drops it to 0.506; `graph`'s one
+  seed that actually bought repair ($0.0633) returns it to exactly 0.955. So the codemod
+  introduces a regression and the LLM tier's contribution here is undoing it — which is a
+  real, defensible argument for the repair tier existing, and also an indictment of that
+  codemod rule.
+- **`cmudig__draco2`: repair reaches full green where T1 cannot.** Untouched 0.884, T1
+  alone 0.878 (slightly worse), `graph` with repair 1.000.
+
+An earlier draft of this entry, and of `main.md`, claimed `eyurtsev__kor` "dropped 0.955 →
+0.655" and read that as the agent breaking a passing repo. That was wrong twice over: 0.655
+is the mean of one repaired seed and two quota-blocked ones (a blend of two different
+pipelines, per D74), and the direction of the story is the reverse — T1 causes the drop,
+repair reverses it. Corrected here rather than quietly edited, because averaging across
+seeds that ran different pipelines is exactly the failure mode D74 documents.
 
 **Interview:** "Every arm agreed to three decimal places, and I wrote that up as a finding
 instead of asking why seven different ablations would ever agree that precisely. The bug
@@ -3466,6 +3482,63 @@ clean result deserves the same scrutiny as a broken one. The uniformity WAS the 
 pointing the other way, and it took me weeks to read it correctly. The fix also surfaced a
 real regression the bug had been hiding — one repo gets actively worse when the agent
 touches it."
+
+---
+
+## D74 — The k=3 arm means blend two different pipelines; the "seed variance" is quota, not seeds
+
+**Why:** in the post-D73 re-run (`a66a001`), Gemini's daily quota ran out *partway through
+the k=3 sweep*, so the three seeds of an arm did not run the same pipeline as each other:
+
+| arm | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `graph` | $0.3138, repair on 4/7 repos, mean 0.499 | $0.0000, 0/7, mean 0.396 | $0.0000, 0/7, mean 0.396 |
+| `wholefile` | $0.0145, 1/7, mean 0.418 | $0.0000, 0/7, mean 0.396 | $0.0000, 0/7, mean 0.396 |
+| `model_groq` | $0.0139, 1/7 | $0.0140, 1/7 | $0.0147, 1/7 |
+
+Seed 0 bought real repair; seeds 1 and 2 bought nothing and silently degenerated into
+`t1_only` (0.396 is *exactly* `t1_only`'s mean). `model_groq` is the control that proves
+this is quota and not seeding: Groq's limits held, so all three of its seeds spent the same
+and scored the same.
+
+**Three consequences, all of which make current numbers unusable as written:**
+
+1. **Every multi-seed arm mean is a blend of two different pipelines.** `graph`'s headline
+   0.431 is `mean(0.499, 0.396, 0.396)` — one run of "T1 + repair" averaged with two runs
+   of "T1 alone." No pipeline has a 0.431 pass rate; the number describes a quota schedule.
+2. **phase-5-eval.md's seed-variance criterion is NOT met, and this run cannot meet it.**
+   The variance is real but it is not seed noise: every varying repo is *higher* in seed 0
+   and *identical* across seeds 1 and 2 (`cmudig__draco2` [1.0, 0.878, 0.878],
+   `eyurtsev__kor` [0.955, 0.506, 0.506], `madkote__fastapi-plugins` [0.519, 0.37, 0.37]).
+   Sampling noise does not produce a monotone step followed by exact ties. Reporting that
+   spread as seed variance would put a reproducibility number on a quota artifact.
+3. **Most arms did not exercise their own ablation at all.** `embedding`, `no_triage`, and
+   `t1_only` each spent $0.00 across all 21 cells and are numerically *identical* to one
+   another (mean 0.396, same per-repo values, same diff-similarity). That identity is not
+   a finding about retrieval or triage — all three measured T1 and nothing else. `no_t1` is
+   emptier still: T1 off by design plus zero successful repair calls means nothing ran, and
+   its 0.266 is the untouched baseline.
+
+**Alternatives considered:** report the arm mean with a footnote — rejected, a reader takes
+the number from the table and the footnote does not travel with it. Drop seeds 1 and 2 and
+report seed 0 alone — rejected as silently discarding real (if degenerate) measurements,
+and it would still leave arms whose every seed was quota-blocked claiming an ablation they
+never ran. Average only cells that bought repair — rejected: that conditions the metric on
+an outcome, so an arm that repaired one easy repo would outrank one that attempted seven
+hard ones.
+
+**What this actually needs** is for a cell to record whether repair was *attempted and
+reached the model*, and for the report to refuse to aggregate across cells that differ in
+that, rather than inferring it from a near-zero cost column by eye. Not implemented yet —
+recorded here so the current tables are not read as if it were.
+
+**Interview:** "The re-run looked like a clean k=3 sweep, and the arm means looked
+plausible. They were averages over seeds that had run *different pipelines*, because the
+API quota died a third of the way through — so one seed measured T1-plus-repair and two
+measured T1 alone, and the mean described neither. The giveaway was that three arms came
+out numerically identical to each other, which is the same tell as the earlier no-op bug:
+when independent things agree exactly, that is usually the measurement collapsing, not a
+result."
 
 ---
 

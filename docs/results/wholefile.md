@@ -1,5 +1,21 @@
 # Eval results — `wholefile`
 
+> **Barely exercised: one repo, in one seed, bought repair.** Post-D73. Seed 0 spent
+> $0.0145 on `madkote__fastapi-plugins` alone; seeds 1 and 2 spent $0.0000 and degenerated
+> to T1-only, scoring 0.396 — `t1_only`'s exact mean. The headline 0.404 below is
+> `mean(0.418, 0.396, 0.396)`, a blend of two different pipelines rather than a property of
+> either (docs/decisions.md D74). The single per-repo range, `madkote__fastapi-plugins`
+> [0.519, 0.37, 0.37], is quota state and not seed variance: high where repair ran,
+> identical where it did not.
+>
+> phase-5-eval.md singles this arm out as the one "a sharp interviewer will ask for" —
+> does a naive whole-file dump tie graph retrieval? **That question is still open.**
+> `graph` bought repair on 4 repos and this arm on 1, so the gap between them reflects how
+> much quota each happened to get, not how well either retrieves. The one real data point:
+> `madkote__fastapi-plugins` reached 0.519 here with whole-file context, the same value
+> `graph` reached on that repo — a single tie on a single repo, which is worth noting and
+> nowhere near enough to answer the question.
+
 **7 repos (21 repo x seed runs)** — 1 full green (every seed passed), mean pass rate 0.404, total cost $0.01
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).

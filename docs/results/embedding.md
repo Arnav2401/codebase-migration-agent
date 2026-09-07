@@ -1,5 +1,19 @@
 # Eval results — `embedding`
 
+> **This arm did not measure embedding retrieval. Do not cite it as an embedding result.**
+> All 21 cells spent **$0.00**: every repair call was quota-blocked (D48), so the retrieval
+> strategy under test never selected context for a model call that happened. What ran was
+> T1's codemod and nothing else — which is why every number in this file is *identical* to
+> `t1_only`'s (mean 0.396, same per-repo values, same diff-similarity to three decimals).
+> That identity is the tell, not a finding: it is what an unexercised ablation looks like
+> (docs/decisions.md D74).
+>
+> The graph-vs-embedding comparison this arm exists to support — phase-5-eval.md calls it
+> "the resume claim" — therefore remains **unmeasured**. `graph` bought real repair in one
+> seed and this arm bought none, so any delta between them is a quota schedule, not a
+> retrieval comparison. Post-D73; before that fix every patch was a silent no-op and the
+> whole file was void.
+
 **7 repos (21 repo x seed runs)** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
