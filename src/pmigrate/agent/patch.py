@@ -26,6 +26,7 @@ a conftest.py fixture or a shared helper — I2 catches that path-independent ca
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 import tempfile
@@ -169,22 +170,50 @@ def apply_patch(repo_root: Path, unified_diff: str) -> PatchResult:
         fh.write(unified_diff)
         patch_path = fh.name
 
-    try:
-        check = subprocess.run(
-            ["git", "apply", "--check", patch_path],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
+    # `repo_root` is a plain scratch directory (the comment above already flags it as "not
+    # necessarily a git repo" for the revert path) that in real eval runs lives INSIDE this
+    # project's own git checkout (`eval_work/<repo_id>/overlay/`, nested under `pmigrate`'s
+    # repo root). Bare `git apply` walks UP from `cwd` looking for a `.git` and, if it finds
+    # one above `repo_root`, resolves the diff's paths against THAT repo's root instead of
+    # `repo_root` -- silently printing "Skipped patch '<path>'." and exiting 0 when the path
+    # doesn't exist there, instead of erroring. `apply_patch` then reports `applied=True`
+    # with nothing actually written to `repo_root`. `GIT_CEILING_DIRECTORIES` set to
+    # `repo_root`'s own parent stops that upward walk before it ever reaches an enclosing
+    # repo, regardless of how many levels above `repo_root` that repo's `.git` actually
+    # lives -- confirmed live: every "applied" repair in the first full eval run (D72)
+    # was exactly this silent no-op, because `eval_work/` sits inside this repo's worktree.
+    #
+    # `resolve()` BOTH the cwd git actually runs in and the ceiling path, from the SAME
+    # `repo_root` object, rather than pairing a raw `cwd` with a resolved ceiling string:
+    # git resolves symlinks in its own cwd before comparing it against
+    # `GIT_CEILING_DIRECTORIES`, so a raw/resolved mismatch (e.g. macOS's `/tmp` ->
+    # `/private/tmp`) makes the ceiling silently fail to match and the whole fix no-ops --
+    # caught live by this file's own regression test running under pytest's `tmp_path`,
+    # which sits under exactly such a symlink.
+    resolved_root = repo_root.resolve()
+    git_env = dict(os.environ)
+    git_env["GIT_CEILING_DIRECTORIES"] = str(resolved_root.parent)
+
+    def _run_git_apply(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            args, cwd=resolved_root, capture_output=True, text=True, timeout=30, env=git_env
         )
+
+    try:
+        check = _run_git_apply(["git", "apply", "--check", patch_path])
         if check.returncode != 0:
             return PatchResult(applied=False, violations=(), files_changed=(), stderr=check.stderr)
 
-        result = subprocess.run(
-            ["git", "apply", patch_path], cwd=repo_root, capture_output=True, text=True, timeout=30
-        )
+        result = _run_git_apply(["git", "apply", patch_path])
         if result.returncode != 0:
             return PatchResult(applied=False, violations=(), files_changed=(), stderr=result.stderr)
+        # Belt-and-suspenders: `git apply` reports "Skipped patch '<path>'." on STDOUT with
+        # exit code 0 (not a nonzero returncode, not stderr) when it decides a hunk doesn't
+        # need applying -- the exact failure mode `GIT_CEILING_DIRECTORIES` above targets,
+        # but also a real git behavior when a patch is (re)submitted after already landing.
+        # Either way, "the write never happened" must not be reported as `applied=True`.
+        if "Skipped patch" in result.stdout:
+            return PatchResult(applied=False, violations=(), files_changed=(), stderr=result.stdout)
     finally:
         Path(patch_path).unlink(missing_ok=True)
 

@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from pmigrate.agent.diff import parse_unified_diff
@@ -165,3 +166,65 @@ def test_apply_patch_fails_cleanly_on_diff_that_does_not_match_disk(tmp_path: Pa
     result = apply_patch(tmp_path, diff)
     assert result.applied is False
     assert result.stderr  # git apply's own error message is surfaced
+
+
+# --- apply_patch when repo_root is nested inside an unrelated git repo --------------
+#
+# The real bug (found live against a k=3 eval run, docs/decisions.md D72): every
+# `run_repo` call's `overlay_root` (`eval_work/<repo_id>/overlay/`) is a PLAIN directory
+# with no `.git` of its own, sitting several levels inside THIS project's own git
+# checkout. Bare `git apply` walks up from `cwd` looking for a `.git`; finding this
+# project's repo above `overlay_root`, it resolves the diff's path against THAT repo's
+# root instead of `cwd` -- and since the path doesn't exist there, it silently prints
+# "Skipped patch '<path>'." and exits 0, instead of erroring. `apply_patch` treated that
+# as success and reported `applied=True` with nothing ever written. None of the tests
+# above catch this because pytest's `tmp_path` is never itself inside a git repo -- these
+# tests build a real outer repo on top of it to reproduce the exact nesting.
+
+
+def _run_git(*args: str, cwd: Path) -> str:
+    return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _init_outer_repo(tmp_path: Path) -> Path:
+    """A real, throwaway git repo at `tmp_path` -- standing in for this project's own
+    checkout, which is what `eval_work/` actually lives inside in production."""
+    _run_git("git", "init", "-q", cwd=tmp_path)
+    _run_git("git", "config", "user.email", "t@t.com", cwd=tmp_path)
+    _run_git("git", "config", "user.name", "t", cwd=tmp_path)
+    (tmp_path / "README.md").write_text("outer repo\n")
+    _run_git("git", "add", ".", cwd=tmp_path)
+    _run_git("git", "commit", "-q", "-m", "outer", cwd=tmp_path)
+    return tmp_path
+
+
+def test_apply_patch_writes_file_when_repo_root_is_nested_inside_an_unrelated_git_repo(
+    tmp_path: Path,
+) -> None:
+    _init_outer_repo(tmp_path)
+    # matches real depth: <outer repo>/eval_work/<repo_id>/overlay/
+    overlay_root = tmp_path / "eval_work" / "some_repo" / "overlay"
+    _write(overlay_root, "app/models.py", "x = m.dict()\n")
+    diff = _diff("app/models.py", "x = m.dict()", "x = m.model_dump()")
+
+    result = apply_patch(overlay_root, diff)
+
+    assert result.applied is True
+    assert result.files_changed == ("app/models.py",)
+    assert (overlay_root / "app/models.py").read_text() == "x = m.model_dump()\n"
+    # the outer repo's own root must stay untouched -- a path-resolution bug here would
+    # misdirect the write to <outer repo>/app/models.py instead of failing loudly
+    assert not (tmp_path / "app").exists()
+
+
+def test_apply_patch_reverts_on_syntax_error_when_repo_root_is_nested(tmp_path: Path) -> None:
+    _init_outer_repo(tmp_path)
+    overlay_root = tmp_path / "eval_work" / "some_repo" / "overlay"
+    _write(overlay_root, "app/broken.py", "x = 1\n")
+    diff = _diff("app/broken.py", "x = 1", "x = (((1")
+
+    result = apply_patch(overlay_root, diff)
+
+    assert result.applied is False
+    assert result.stderr is not None and "invalid syntax" in result.stderr
+    assert (overlay_root / "app/broken.py").read_text() == "x = 1\n"
