@@ -65,6 +65,19 @@ python_version = "3.13"
 strict = true
 exclude = ["tests/"]
 
+# `sentence-transformers` is the optional `embedding` extra (D61), so whether it is
+# importable depends on which install the checkout got -- `make setup` installs only
+# `.[dev]` and leaves it absent. An inline `# type: ignore[import-not-found]` on the
+# import can only ever be right for ONE of those two states: with the package absent it
+# silences a real missing-stub error, and with it installed `strict`'s own
+# warn_unused_ignores flags that same comment as unused. Found live: installing the extra
+# to unblock the embedding eval arm turned a clean `mypy src/pmigrate` into a failing one
+# without a single source line changing. This override is state-independent -- it silences
+# the missing-import error when the package isn't there and says nothing when it is.
+[[tool.mypy.overrides]]
+module = "sentence_transformers.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # TestOutcome/TestRun (types.py) are plain dataclasses that happen to start with "Test" —

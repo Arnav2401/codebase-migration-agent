@@ -168,7 +168,7 @@ class SentenceTransformerEmbedder:
         with self._lock:
             if self._model is None:
                 try:
-                    import sentence_transformers  # type: ignore[import-not-found]
+                    import sentence_transformers
                 except ImportError as exc:
                     raise ImportError(
                         "sentence-transformers is not installed -- run "

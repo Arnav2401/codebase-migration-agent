@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 from pmigrate.eval.config import EvalConfig
@@ -211,3 +212,69 @@ def test_write_main_report_bootstraps_over_per_repo_seed_means_not_raw_rows(
     assert "| graph | 2 |" in content  # N=2 repos, not 4 raw rows
     # per-repo means are [1.0, 0.0] -> arm mean pass_rate 0.5, not (1+1+1+0)/4 = 0.75
     assert "0.500 [" in content
+
+
+# --- model-split caveat (arms spanning more than one model) --------------------------
+
+
+def _result_on_model(repo_id: str, arm: str, model: str) -> RepoResult:
+    result = _result(repo_id, 1.0, True)
+    return replace(result, config=EvalConfig(name=arm, model=model))
+
+
+def test_write_main_report_omits_the_model_caveat_when_every_arm_shares_one_model(
+    tmp_path: Path,
+) -> None:
+    out_path = tmp_path / "main.md"
+
+    write_main_report(
+        {
+            "graph": [_result_on_model("acme__a", "graph", "gemini-3.6-flash")],
+            "no_t1": [_result_on_model("acme__a", "no_t1", "gemini-3.6-flash")],
+        },
+        out_path,
+    )
+
+    assert "do not all run the same model" not in out_path.read_text()
+
+
+def test_write_main_report_warns_and_groups_by_model_when_arms_span_models(
+    tmp_path: Path,
+) -> None:
+    """A reader comparing `no_t1_groq` against `no_t1` would be reading a tier ablation
+    and a model change at once -- the report has to say so, since the arm NAME mentions
+    only the tier and the model is invisible in the row."""
+    out_path = tmp_path / "main.md"
+
+    write_main_report(
+        {
+            "graph": [_result_on_model("acme__a", "graph", "gemini-3.6-flash")],
+            "no_t1_groq": [_result_on_model("acme__a", "no_t1_groq", "openai/gpt-oss-120b")],
+        },
+        out_path,
+    )
+
+    content = out_path.read_text()
+    assert "do not all run the same model" in content
+    # each model lists exactly the arms that ran under it
+    assert "> - `gemini-3.6-flash`: `graph`" in content
+    assert "> - `openai/gpt-oss-120b`: `no_t1_groq`" in content
+
+
+def test_write_main_report_model_caveat_ignores_arms_with_no_scored_repos(
+    tmp_path: Path,
+) -> None:
+    """An empty arm contributes no model, so it must not trip the caveat on its own --
+    otherwise a single-model report with one unscored arm would warn about a split that
+    doesn't exist."""
+    out_path = tmp_path / "main.md"
+
+    write_main_report(
+        {
+            "graph": [_result_on_model("acme__a", "graph", "gemini-3.6-flash")],
+            "embedding": [],
+        },
+        out_path,
+    )
+
+    assert "do not all run the same model" not in out_path.read_text()

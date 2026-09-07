@@ -187,6 +187,57 @@ def write_results_table(results: list[RepoResult], out_path: Path, *, config_nam
     out_path.write_text("\n".join(lines) + "\n")
 
 
+def _model_split_caveat(results_by_config: dict[str, list[RepoResult]]) -> list[str]:
+    """Emitted ONLY when the arms in one report don't all run the same model -- silent
+    otherwise, so a single-model report carries no noise.
+
+    Exists because the headline table's whole value is that two rows differ in exactly one
+    thing, so the row-to-row delta names what that thing cost. The moment arms span models
+    that stops being true: `no_t1_groq` vs `no_t1` differs in BOTH the tier set and the
+    model, so the delta between them measures neither one. Reading it as "removing T1 did
+    this" is precisely the kind of dishonest number CLAUDE.md's review rules exist to
+    catch, and nothing else in this report would stop a reader from doing it -- the arm
+    NAME says `no_t1`, and the model it ran under is invisible in the row.
+
+    Derived from each `RepoResult`'s own `config.model` rather than a hardcoded list of
+    which arms are "the Groq ones": the arms in this repo change, and a hand-maintained
+    list would silently go stale the first time someone adds an arm without updating it.
+    """
+    models_by_arm: dict[str, set[str]] = {}
+    for name, results in results_by_config.items():
+        models = {r.config.model for r in results}
+        if models:  # an arm with no scored repos has no model to report
+            models_by_arm[name] = models
+
+    distinct_models = set().union(*models_by_arm.values()) if models_by_arm else set()
+    if len(distinct_models) <= 1:
+        return []
+
+    lines = [
+        "",
+        "> **These arms do not all run the same model — do not read across the split.** "
+        "Each row differs from the others in more than the thing its name calls out, so a "
+        "difference between two arms on opposite sides of the split confounds the "
+        "ablation with the model change and measures neither. Compare only within a model:",
+        "",
+    ]
+    for model in sorted(distinct_models):
+        arms = sorted(name for name, models in models_by_arm.items() if model in models)
+        lines.append(f"> - `{model}`: {', '.join(f'`{a}`' for a in arms)}")
+    lines.append("> ")
+    lines.append(
+        "> The split is not a design choice — it is a quota artifact. Gemini's free tier "
+        "here is 20 requests/day and trickle-refills rather than resetting cleanly "
+        "(docs/decisions.md D48), which left some arms fully rate-limited with every "
+        "repair call returning 429. Those arms were re-run against Groq, which has orders "
+        "of magnitude more headroom, so that the ablation they encode could be measured at "
+        "all. An arm whose Gemini run was fully quota-blocked reports real test outcomes "
+        "but no real repair activity — its numbers reflect T1's deterministic codemod "
+        "alone, not the tier or retrieval strategy its name describes."
+    )
+    return lines
+
+
 def write_main_report(results_by_config: dict[str, list[RepoResult]], out_path: Path) -> None:
     """One headline row per arm plus every arm's own per-repo appendix underneath.
     `results_by_config` maps an arm's `EvalConfig.name` to every `RepoResult` scored under
@@ -209,6 +260,7 @@ def write_main_report(results_by_config: dict[str, list[RepoResult]], out_path: 
         "repos, not repo x seed cells, even for an arm run under multiple seeds "
         "(docs/decisions.md D72)."
     )
+    lines.extend(_model_split_caveat(results_by_config))
     lines.append("")
     lines.append(
         "| arm | N | pass_rate (mean [95% CI]) | full_green (fraction [95% CI]) | mean cost | "
