@@ -1,12 +1,14 @@
 from pathlib import Path
 
 from pmigrate.agent.repair import (
+    PromptBudget,
     build_repair_prompt,
     collect_failure_texts,
     extract_rewritten_files,
     extract_target_file,
     find_related_files,
     repair_system_prompt,
+    target_exceeds_budget,
 )
 from pmigrate.types import TestOutcome, TestRun
 
@@ -133,7 +135,7 @@ def test_extract_target_file_returns_none_for_unrecognized_failure_shape(tmp_pat
 
 
 def test_build_repair_prompt_includes_path_content_and_failures() -> None:
-    prompt = build_repair_prompt({"app/models.py": "x = 1\n"}, ("failure detail here",))
+    prompt = build_repair_prompt({"app/models.py": "x = 1\n"}, ("failure detail here",)).text
     assert "app/models.py" in prompt
     assert "x = 1" in prompt
     assert "failure detail here" in prompt
@@ -142,11 +144,77 @@ def test_build_repair_prompt_includes_path_content_and_failures() -> None:
 def test_build_repair_prompt_includes_every_file_when_multiple_given() -> None:
     prompt = build_repair_prompt(
         {"app/models.py": "x = 1\n", "app/base.py": "y = 2\n"}, ("failure detail",)
-    )
+    ).text
     assert "app/models.py" in prompt
     assert "x = 1" in prompt
     assert "app/base.py" in prompt
     assert "y = 2" in prompt
+
+
+# --- prompt budget (docs/decisions.md D75) ------------------------------------------
+
+
+def test_build_repair_prompt_without_a_budget_drops_nothing() -> None:
+    """The uncapped default must stay byte-identical to pre-D75 behavior, since every
+    existing arm's results were produced under it."""
+    built = build_repair_prompt(
+        {"app/models.py": "x = 1\n", "app/base.py": "y" * 100_000},
+        ("f" * 100_000,),
+        target_path="app/models.py",
+    )
+    assert built.dropped_files == ()
+    assert built.failure_chars_dropped == 0
+    assert "y" * 100 in built.text
+
+
+def test_build_repair_prompt_trims_failure_text_before_dropping_files() -> None:
+    """Failure output is diagnostic and highly redundant; a related file is context the
+    model may actually need. Trim order matters, so it is pinned here."""
+    built = build_repair_prompt(
+        {"app/models.py": "x = 1\n", "app/base.py": "y = 2\n"},
+        ("f" * 40_000,),
+        target_path="app/models.py",
+        budget=PromptBudget(max_prompt_tokens=2_000, max_failure_tokens=100),
+    )
+    assert built.failure_chars_dropped > 0
+    assert built.dropped_files == ()  # the small related file still fit
+    assert "app/base.py" in built.text
+
+
+def test_build_repair_prompt_drops_related_files_but_never_the_target() -> None:
+    """The model is asked to emit a corrected version of the target (D25), so a truncated
+    or missing target would mean silently rewriting a truncated file."""
+    built = build_repair_prompt(
+        {"app/models.py": "target = 1\n", "app/big.py": "z" * 200_000},
+        ("short failure",),
+        target_path="app/models.py",
+        budget=PromptBudget(max_prompt_tokens=1_000, max_failure_tokens=200),
+    )
+    assert built.dropped_files == ("app/big.py",)
+    assert "app/models.py" in built.text
+    assert "target = 1" in built.text
+    assert "z" * 100 not in built.text
+
+
+def test_build_repair_prompt_drops_lowest_ranked_related_file_first() -> None:
+    """Retrieval returns related files ranked, so the last is the weakest candidate."""
+    built = build_repair_prompt(
+        {
+            "app/models.py": "target = 1\n",
+            "app/strong.py": "s" * 3_000,
+            "app/weak.py": "w" * 3_000,
+        },
+        ("short failure",),
+        target_path="app/models.py",
+        budget=PromptBudget(max_prompt_tokens=1_000, max_failure_tokens=200),
+    )
+    assert built.dropped_files[0] == "app/weak.py"
+
+
+def test_target_exceeds_budget_flags_a_target_that_cannot_ever_fit() -> None:
+    budget = PromptBudget(max_prompt_tokens=1_000, max_failure_tokens=200)
+    assert target_exceeds_budget("z" * 200_000, budget) is True
+    assert target_exceeds_budget("x = 1\n", budget) is False
 
 
 def test_extract_rewritten_files_parses_a_single_file_block() -> None:

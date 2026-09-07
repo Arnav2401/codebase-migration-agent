@@ -22,6 +22,7 @@ real corpus tracebacks, not hypothesized):
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import libcst as cst
@@ -148,12 +149,112 @@ def find_related_files(target_path: str, before: str, repo_root: Path) -> tuple[
     return tuple(sorted(set(found.values())))
 
 
-def build_repair_prompt(files: dict[str, str], failure_texts: tuple[str, ...]) -> str:
-    file_blocks = "\n\n".join(
-        f"File: {path}\n\n```python\n{content}\n```" for path, content in files.items()
-    )
+@dataclass(frozen=True)
+class PromptBudget:
+    """Caps the ASSEMBLED repair prompt (docs/decisions.md D75). Distinct from
+    `retrieval.py`'s `budget_tokens`, which only decides which files get SELECTED --
+    `graph.py` then inlines each selected file whole, so nothing bounded the payload and
+    Groq returned `413 Payload Too Large` on most of this corpus.
+
+    `max_failure_tokens` is a sub-cap inside `max_prompt_tokens` because the failing-test
+    section is the part that actually explodes: `okfn__opendataeditor`'s whole Python
+    source is 98KB, yet its repair prompt reached ~107k tokens (~426KB), since one
+    traceback repeated across dozens of collection errors dwarfs the code."""
+
+    max_prompt_tokens: int
+    max_failure_tokens: int
+
+
+@dataclass(frozen=True)
+class BuiltPrompt:
+    """`dropped_files`/`failure_chars_dropped` exist so a degraded prompt is visible in
+    the trace rather than silent -- a repair that failed because context was trimmed away
+    must be distinguishable from one that saw everything and still failed."""
+
+    text: str
+    dropped_files: tuple[str, ...] = ()
+    failure_chars_dropped: int = 0
+
+
+# Deliberately NOT `graph/token_budget.py`'s 8-tokens-per-LINE heuristic: that one
+# estimates from symbol line ranges because no graph backend retains source text. Here the
+# real text is in hand, and prompts carry long tracebacks and deeply indented code where
+# per-line cost varies wildly, so chars/4 is the closer approximation. Both stay estimates
+# -- neither tokenizes for real, and this cap is a guardrail against a 413, not accounting.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // _CHARS_PER_TOKEN_ESTIMATE
+
+
+def _file_block(path: str, content: str) -> str:
+    return f"File: {path}\n\n```python\n{content}\n```"
+
+
+def build_repair_prompt(
+    files: dict[str, str],
+    failure_texts: tuple[str, ...],
+    *,
+    target_path: str | None = None,
+    budget: PromptBudget | None = None,
+) -> BuiltPrompt:
+    """`budget=None` reproduces the original uncapped behavior exactly, so every existing
+    caller and test keeps its semantics until it opts in.
+
+    Trim order is deliberate (D75). The TARGET file is never trimmed: the model is asked
+    to emit a corrected version of it (D25), so feeding it a truncated file would get back
+    a truncated file and silently destroy code. Failure text is trimmed first since it is
+    diagnostic and highly redundant; whole related files are dropped last-first only if
+    that still isn't enough. A target that alone exceeds the budget is left to the caller
+    to reject -- `graph.py` skips the model call rather than firing a request it knows
+    will 413."""
+    if target_path is None:
+        target_path = next(iter(files), "")
+
     failures = "\n\n---\n\n".join(failure_texts)
-    return f"{file_blocks}\n\nFailing test output:\n\n{failures}\n"
+    failure_chars_dropped = 0
+    dropped: list[str] = []
+
+    if budget is not None:
+        max_failure_chars = budget.max_failure_tokens * _CHARS_PER_TOKEN_ESTIMATE
+        if len(failures) > max_failure_chars:
+            failure_chars_dropped = len(failures) - max_failure_chars
+            failures = (
+                failures[:max_failure_chars]
+                + f"\n\n[... {failure_chars_dropped} characters of further failure output "
+                "omitted to fit the prompt budget ...]"
+            )
+
+        # Drop related files from the END first: retrieval returns them ranked, so the
+        # last is the weakest candidate. The target is excluded from consideration
+        # entirely rather than merely ordered first, so no ordering bug can drop it.
+        related = [p for p in files if p != target_path]
+        kept = dict(files)
+        while related:
+            body = "\n\n".join(_file_block(p, kept[p]) for p in kept)
+            if _estimate_tokens(f"{body}\n\nFailing test output:\n\n{failures}\n") <= (
+                budget.max_prompt_tokens
+            ):
+                break
+            victim = related.pop()
+            del kept[victim]
+            dropped.append(victim)
+        files = kept
+
+    file_blocks = "\n\n".join(_file_block(path, content) for path, content in files.items())
+    return BuiltPrompt(
+        text=f"{file_blocks}\n\nFailing test output:\n\n{failures}\n",
+        dropped_files=tuple(dropped),
+        failure_chars_dropped=failure_chars_dropped,
+    )
+
+
+def target_exceeds_budget(target_content: str, budget: PromptBudget) -> bool:
+    """True when the target file alone cannot fit, meaning no amount of dropping context
+    makes a viable request. Callers should skip the model call entirely (D75) rather than
+    spend a quota unit on a request that will 413."""
+    return _estimate_tokens(_file_block("x", target_content)) > budget.max_prompt_tokens
 
 
 def extract_rewritten_files(response_text: str) -> dict[str, str]:

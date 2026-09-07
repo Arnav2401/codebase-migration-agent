@@ -17,7 +17,13 @@ Status = Literal["running", "done", "budget_exceeded", "no_progress", "failed"]
 EditSource = Literal["T1", "T2", "T3"]
 # Mirrors repair()'s five real `agent.repair_*` log events exactly (agent/graph.py) --
 # no new vocabulary invented here, just persisting what was already being logged.
-RepairOutcome = Literal["no_target", "model_error", "no_edit", "applied", "rejected"]
+# "skipped_oversize" (docs/decisions.md D75): the target file alone exceeds the prompt
+# budget, so no amount of dropping context makes a viable request. Distinct from
+# "model_error" on purpose -- nothing was sent and nothing was spent, so counting it as a
+# model failure would blame the model for a request this code declined to make.
+RepairOutcome = Literal[
+    "no_target", "model_error", "no_edit", "applied", "rejected", "skipped_oversize"
+]
 
 
 @dataclass(frozen=True)

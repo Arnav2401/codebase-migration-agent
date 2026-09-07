@@ -48,6 +48,11 @@ class EvalConfig:
     triage: bool = True
     seed: int = 0
     usd_cap_per_repo: float = 5.0
+    # docs/decisions.md D75. `None` = uncapped, matching every pre-D75 run's behavior so
+    # existing configs keep their exact semantics (and their config_hash, since to_dict
+    # omits it when None). Set it to give an arm a payload ceiling -- required for Groq,
+    # which returns 413 on most of this corpus at the uncapped size.
+    max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.retrieval not in _IMPLEMENTED_RETRIEVAL_KINDS:
@@ -68,7 +73,7 @@ class EvalConfig:
         JSON-native, so `dataclasses.asdict` alone can't round-trip this type -- lives
         here, not in `eval/store.py`/`eval/manifest.py`, since both need the exact same
         encoding and this is the type that owns what its own fields mean."""
-        return {
+        encoded = {
             "name": self.name,
             "model": self.model,
             "retrieval": self.retrieval,
@@ -77,6 +82,12 @@ class EvalConfig:
             "seed": self.seed,
             "usd_cap_per_repo": self.usd_cap_per_repo,
         }
+        # Omitted when None so every pre-D75 config hashes exactly as it did before this
+        # field existed -- adding a key with a null value would change config_hash for all
+        # seven existing arms and silently invalidate their resumable cells (D63).
+        if self.max_prompt_tokens is not None:
+            encoded["max_prompt_tokens"] = self.max_prompt_tokens
+        return encoded
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> EvalConfig:
@@ -88,4 +99,5 @@ class EvalConfig:
             triage=data["triage"],
             seed=data["seed"],
             usd_cap_per_repo=data["usd_cap_per_repo"],
+            max_prompt_tokens=data.get("max_prompt_tokens"),
         )

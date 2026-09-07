@@ -3542,6 +3542,75 @@ result."
 
 ---
 
+## D75 — Bound the assembled repair prompt; retrieval's budget never did
+
+**Why:** `retrieval.py`'s `budget_tokens` (4000) decides which files get SELECTED, and
+then `graph.py` reads each selected file **in full** into the prompt — so nothing bounded
+the payload. `build_repair_prompt` concatenated every file whole plus every failure text
+whole. Measured consequences: `okfn__opendataeditor`'s entire Python source is 98KB, yet
+its repair prompt reached ~107k tokens (~426KB), because one traceback repeated across
+dozens of collection errors dwarfs the code; `Aiven-Open__rohmu` sent ~72k tokens. Groq
+returns `413 Payload Too Large` at that size on most of this corpus, which is exactly why
+`model_groq` only ever got a repair call through on 1 of 7 repos (D74) — the arm looked
+like a weak provider and was really a payload bug.
+
+This also quietly undermined the retrieval ablation itself: the three strategies claim
+"comparable budgets" in their docstrings, but since selection was the only thing budgeted
+and every selection was inlined whole, what actually varied between arms was file COUNT,
+not context size.
+
+**Alternatives:** truncate related files mid-file to keep more of them — rejected: the
+model reasons about imports and class definitions, and half a file is worse than no file,
+since a truncated class body reads as a complete but wrong definition. Change the
+`Retrieval` protocol to return line ranges instead of paths so retrieval genuinely owns
+context construction — the *right* long-term design and still worth doing, but rejected
+for now because it changes what every arm means mid-measurement, and the immediate problem
+is that most arms cannot make a single successful call. Cap only total tokens without a
+failure sub-cap — rejected: the failure section is what actually explodes, so a single cap
+would silently evict real code in favour of a traceback repeated forty times.
+
+**Fixed by** a `PromptBudget(max_prompt_tokens, max_failure_tokens)` applied inside
+`build_repair_prompt`, which now returns a `BuiltPrompt` carrying `dropped_files` and
+`failure_chars_dropped` so a degraded prompt is visible in the trace instead of silent — a
+repair that failed on trimmed context must stay distinguishable from one that saw
+everything and still failed. Trim order, strictest first:
+
+1. **The target file is never trimmed or dropped.** The model is asked to emit a corrected
+   version of it (D25), so feeding a truncated target gets back a truncated file and
+   silently destroys code. It is excluded from the drop candidates entirely rather than
+   merely ordered last, so no future ordering bug can reach it.
+2. Failure text is trimmed to `max_failure_tokens`, with a marker naming how much was cut.
+3. Whole related files are dropped last-first (retrieval returns them ranked, so the last
+   is the weakest candidate).
+
+A target that alone exceeds the budget yields the new `"skipped_oversize"` RepairOutcome
+rather than a doomed request: nothing is sent and nothing is spent, so counting it as
+`model_error` would blame the model for a call this code declined to make.
+`EvalConfig.max_prompt_tokens` (default `None` = uncapped, and omitted from `to_dict` when
+None so all seven existing arms keep their exact `config_hash` and resumable cells per
+D63) threads through `harness.py` to `build_migration_graph`.
+
+**Not yet validated against a live 413.** Both providers were exhausted at implementation
+time — Gemini 429 on its daily quota, and Groq 429 with `retry_after_s` of 8666 then
+19594. Worse, my own attempt to find Groq's payload ceiling empirically (100/200/400KB
+probes) is part of what burned Groq's remaining token budget for the day. That was a bad
+trade: the ceiling could have been approached from below with a conservative default and
+one real repo, instead of spending the day's quota on synthetic payloads to find a number
+I did not strictly need. The cap is unit-tested but the number to set it to is still
+unmeasured.
+
+**Interview:** "The Groq arm looked like a weak provider — it only ever got a repair call
+through on one repo out of seven. It was actually a payload bug: retrieval budgeted which
+files to select, then the prompt builder inlined every selected file whole, so a repo with
+98KB of source could produce a 426KB prompt once you counted the same traceback repeated
+across every collection error. The fix was less interesting than the ordering question it
+forced — what do you throw away first when context doesn't fit? Failure text is redundant
+so it goes first, related files are ranked so the weakest goes next, and the target file
+is untouchable, because the model is being asked to rewrite that file and handing it a
+truncated one means it hands you a truncated file back."
+
+---
+
 ## Template
 
 ```

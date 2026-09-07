@@ -57,6 +57,7 @@ import structlog
 from pmigrate.agent.budget import BudgetState
 from pmigrate.agent.graph import build_migration_graph
 from pmigrate.agent.model_client import ModelClient
+from pmigrate.agent.repair import PromptBudget
 from pmigrate.agent.retrieval import (
     Embedder,
     EmbeddingRetrieval,
@@ -297,6 +298,21 @@ def _build_retrieval(
     raise ValueError(f"no Retrieval implementation wired up for retrieval={config.retrieval!r}")
 
 
+def _build_prompt_budget(config: EvalConfig) -> PromptBudget | None:
+    """docs/decisions.md D75. `None` (the default) leaves repair uncapped exactly as
+    before this existed. The failure sub-cap is derived as a quarter of the total rather
+    than exposed as its own config knob: the two are not independently meaningful — a
+    failure cap above the prompt cap does nothing, and one far below it throws away
+    diagnostics for no gain — and one number per arm is enough to reason about in a
+    results table."""
+    if config.max_prompt_tokens is None:
+        return None
+    return PromptBudget(
+        max_prompt_tokens=config.max_prompt_tokens,
+        max_failure_tokens=max(1, config.max_prompt_tokens // 4),
+    )
+
+
 def run_repo(
     repo: RepoSpec,
     *,
@@ -351,6 +367,7 @@ def run_repo(
         use_triage=config.triage,
         retrieval=_build_retrieval(config, repo.repo_id, embedder=embedder),
         enable_t1="T1" in config.tiers,
+        prompt_budget=_build_prompt_budget(config),
     )
 
     start = time.time()

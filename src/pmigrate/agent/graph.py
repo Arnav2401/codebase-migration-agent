@@ -27,11 +27,13 @@ from pmigrate.agent.diff import make_unified_diff
 from pmigrate.agent.model_client import ModelClient
 from pmigrate.agent.patch import apply_patch
 from pmigrate.agent.repair import (
+    PromptBudget,
     build_repair_prompt,
     extract_rewritten_files,
     extract_target_file,
     find_related_files,
     repair_system_prompt,
+    target_exceeds_budget,
 )
 from pmigrate.agent.retrieval import Retrieval
 from pmigrate.agent.state import AgentState, Edit, RepairAttempt, RepairOutcome
@@ -123,6 +125,7 @@ def build_migration_graph(
     use_triage: bool = True,
     retrieval: Retrieval | None = None,
     enable_t1: bool = True,
+    prompt_budget: PromptBudget | None = None,
 ) -> Any:
     # Any: langgraph's CompiledStateGraph is generic over 4 type params callers never
     # interact with beyond .invoke() — parametrizing it precisely here would add real
@@ -355,11 +358,40 @@ def build_migration_graph(
             return {"repair_attempts": [*state.repair_attempts, _record("no_target")]}
 
         target_before = (overlay_root / target_path).read_text()
+
+        # docs/decisions.md D75: bail BEFORE spending a request we know will 413. Nothing
+        # is sent and nothing is spent, so this is its own outcome rather than a
+        # model_error -- see state.py's RepairOutcome.
+        if prompt_budget is not None and target_exceeds_budget(target_before, prompt_budget):
+            log.warning(
+                "agent.repair_skipped_oversize",
+                repo_id=state.repo.repo_id,
+                path=target_path,
+                target_chars=len(target_before),
+                max_prompt_tokens=prompt_budget.max_prompt_tokens,
+                trace_id=state.trace_id,
+            )
+            return {"repair_attempts": [*state.repair_attempts, _record("skipped_oversize")]}
+
         find_related = retrieval.related_files if retrieval is not None else find_related_files
         related_paths = find_related(target_path, target_before, overlay_root)
         paths = (target_path, *related_paths)
         before_by_path = {p: (overlay_root / p).read_text() for p in paths}
-        prompt = build_repair_prompt(before_by_path, failure_texts)
+        built = build_repair_prompt(
+            before_by_path, failure_texts, target_path=target_path, budget=prompt_budget
+        )
+        if built.dropped_files or built.failure_chars_dropped:
+            # A repair that failed on trimmed context must be distinguishable from one
+            # that saw everything and still failed (D75).
+            log.info(
+                "agent.repair_prompt_trimmed",
+                repo_id=state.repo.repo_id,
+                path=target_path,
+                dropped_files=list(built.dropped_files),
+                failure_chars_dropped=built.failure_chars_dropped,
+                trace_id=state.trace_id,
+            )
+        prompt = built.text
 
         try:
             response = model_client.complete(system=repair_system_prompt(), prompt=prompt)
