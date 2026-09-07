@@ -3306,6 +3306,77 @@ repos simply couldn't be compared, not on how good the agent's fixes actually we
 
 ---
 
+## D72 — `eval/run.py --seeds` for phase-5-eval.md's k=3 seed-variance protocol
+
+**Alternatives:** encode the seed into `EvalConfig.name` (e.g. `"graph_seed1"`) so each
+seed shows up as its own arm in `docs/results/main.md` — rejected: that's what already
+happens today if someone hand-runs three seed-varied config files, and it's wrong. It
+would inflate an arm's `N` by 3x in the headline bootstrap CI and silently misrepresent
+seed noise (the SAME repo scored three times) as three times the repo coverage. Adding a
+`seed: int` field to `RepoResult` grouping logic that treats seed as just another
+dimension to average blindly over — rejected in favor of grouping by `repo_id` FIRST and
+computing the arm-level statistic over PER-REPO means: phase-5-eval.md's own words are
+"bootstrap 95% CIs over repos," and repos, not repo x seed cells, is the thing being
+resampled. Threading `EvalConfig.seed` into an actual RNG or the model API calls
+themselves — investigated but explicitly out of scope for this change: `model_client.py`
+hardcodes `temperature=0` for both Gemini and Groq and neither client's request body
+accepts a `seed` param at all, so there is no RNG this project controls to seed. What
+`--seeds` measures instead is real, uncontrolled API-level non-determinism at
+temperature=0 across independent invocations — matching phase-5-eval.md's own framing
+("accept that LLM sampling still varies... run k=3 seeds and report variance"), just
+worth being explicit that "seed" here is a run-index label, not a controlled RNG seed.
+
+**Why:** `EvalConfig.seed` (docs/decisions.md D63) already existed and was already part
+of `config_hash`, so seed=0/1/2 were already independently resumable DB cells — but
+nothing in `eval/run.py`'s CLI could actually drive more than one seed per invocation
+(only settable by hand-editing a config JSON file), and `eval/report.py` had no concept
+of "these RepoResults are the same repo scored under different seeds" — it would have
+just rendered three separate rows for the same `repo_id`, one per seed, silently
+tripling that repo's weight in every mean and CI. Caught while assessing how much of
+Phase 5 remained: k=3 seed variance is explicitly named in phase-5-eval.md's own
+acceptance criteria and Design section, and neither the CLI nor the report ever
+implemented it.
+
+**Fixed by** a new `--seeds` option on `eval/run.py` (default `"0"`, preserving every
+existing invocation's exact behavior), parsed into a list of ints and looped over inside
+`main`: each seed builds its own `EvalConfig` via `dataclasses.replace(base_config,
+seed=seed)`, gets its own `RunManifest` (`{config}.manifest.json` for the single-seed
+default; `{config}.seed{n}.manifest.json` per seed once more than one is named), and
+runs through the existing `run_corpus`/`ResultStore` machinery completely unchanged —
+each seed is just another independently resumable cell, same as D63 already made
+possible. All seeds' `RepoResult`s are combined into ONE `docs/results/<config>.md` via
+`write_results_table`.
+
+On the reporting side, `eval/report.py` now groups every `RepoResult` by `repo_id` before
+doing anything else (`_group_by_repo`). `_repo_row` renders one table row per repo: for a
+repo with exactly one seed's result (every arm run before this change, and every
+single-seed run after it), the row is byte-identical to the pre-D72 format — no seed
+notation appears anywhere. For a repo with more than one seed's result, the row shows
+`mean [min, max] (k=N seeds)` for `pass_rate`, a `count/k` fraction for `full_green`, the
+summed cost across those seeds, and mean iterations. The arm-level aggregate (mean
+pass_rate, `full_green` count, bootstrap CIs, and D71's diff-similarity means) is computed
+over `_per_repo_means`/`_per_repo_diff_means` — one value per repo, itself averaged
+across that repo's own seeds first — so `N` in every headline number is the repo count,
+never inflated by how many seeds ran.
+
+**Honest limit:** this change makes the k=3 protocol *possible* and *correctly reported*
+end-to-end (12 new/updated tests in `tests/eval/test_run.py` and
+`tests/eval/test_report.py` cover the CLI validation and the grouping/aggregation logic),
+but it has not yet been run for real against any arm — phase-5-eval.md's own acceptance
+criterion ("full dev-split run reproduces to within seed variance across two
+invocations") stays unmet until someone actually runs `--seeds 0,1,2` against a live,
+non-quota-blocked arm and the resulting variance gets written up.
+
+**Interview:** "The seed field already existed in the config and was already part of the
+resume key — the gap was that nothing ever drove more than one seed per invocation, and
+the report had no idea that two RepoResults for the same repo under different seeds
+should be treated as one data point with noise, not two independent repos. The design
+question that mattered most was where to put the aggregation: grouping by repo before
+computing any arm-level statistic, rather than after, is what keeps a 3-seed re-run from
+quietly tripling that repo's influence on the reported confidence interval."
+
+---
+
 ## Template
 
 ```

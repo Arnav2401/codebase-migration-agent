@@ -23,6 +23,19 @@ actually does (and doesn't: `total_usd_cap` stops STARTING new repos, not in-fli
 purpose so a caller pointing `work_root` at a fresh/scratch location per run doesn't
 also silently throw away the one thing that's expensive to rebuild.
 
+`--seeds` (docs/decisions.md D72, phase-5-eval.md's k=3 seed-variance protocol) is a
+comma-separated list of ints, default `"0"` -- preserves this command's exact original
+single-run behavior when unset. Each named seed runs the SAME `EvalConfig` (via
+`dataclasses.replace`, only `seed` differs) through its own `run_corpus` call: `seed` is
+already part of `EvalConfig.to_dict`/`config_hash` (D63), so seed=0/1/2 are already
+independently resumable DB cells with their own `usd_cap_per_repo` budget -- nothing
+about the store or budget semantics changes, this just drives multiple such calls from
+one invocation instead of requiring three hand-edited config files. One `RunManifest` is
+written per seed (`{config}.manifest.json` for the single-seed default, matching every
+existing manifest exactly; `{config}.seed{n}.manifest.json` per seed once more than one
+is named) but all seeds' `RepoResult`s are combined into ONE `{config}.md` via
+`write_results_table`, which groups by `repo_id` across seeds (D72).
+
 Not unit-tested against real Docker/network (matches `eval/harness.py`'s own
 `run_corpus` carve-out — `checkout_pre_sha` itself IS unit-tested, against a real local
 git repo, see that module's docstring) — `main`'s own orchestration is exercised by a
@@ -52,6 +65,7 @@ from pmigrate.eval.manifest import (
     build_prompt_hashes,
     write_run_manifest,
 )
+from pmigrate.eval.metrics import RepoResult
 from pmigrate.eval.report import write_results_table
 from pmigrate.eval.store import ResultStore, ResumeContext, corpus_sha
 from pmigrate.sandbox.runner import DockerSandbox
@@ -100,18 +114,38 @@ def main(
     max_workers: int = 1,
     total_usd_cap: float | None = None,
     clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
+    seeds: str = typer.Option(
+        "0",
+        help=(
+            "Comma-separated seeds to run this config under (docs/decisions.md D72, "
+            "phase-5-eval.md's k=3 seed-variance protocol), e.g. '0,1,2'. Each seed is "
+            "an independently resumable run of the same config; results from every "
+            "seed are combined into one docs/results/<config>.md."
+        ),
+    ),
 ) -> None:
     if split not in ("dev", "test"):
         raise typer.BadParameter(f"split must be 'dev' or 'test', got {split!r}")
     if max_workers < 1:
         raise typer.BadParameter(f"max_workers must be >= 1, got {max_workers}")
 
+    try:
+        seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"seeds must be a comma-separated list of ints, got {seeds!r}"
+        ) from exc
+    if not seed_list:
+        raise typer.BadParameter("seeds must name at least one seed")
+    if len(set(seed_list)) != len(seed_list):
+        raise typer.BadParameter(f"seeds must not repeat, got {seeds!r}")
+
     config_path = configs_dir / f"{config}.json"
     if not config_path.exists():
         available = sorted(p.stem for p in configs_dir.glob("*.json"))
         typer.echo(f"no config at {config_path} -- available: {available}", err=True)
         raise typer.Exit(code=1)
-    eval_config = EvalConfig.from_dict(json.loads(config_path.read_text()))
+    base_config = EvalConfig.from_dict(json.loads(config_path.read_text()))
 
     if shutil.which("docker") is None:
         typer.echo(
@@ -121,45 +155,58 @@ def main(
         )
         raise typer.Exit(code=1)
 
-    model_client = _build_model_client(eval_config)
-
     specs = load_manifest(manifest_path)
     c_sha = corpus_sha(manifest_path)
 
-    manifest = RunManifest(
-        corpus_sha=c_sha,
-        prompt_hashes=build_prompt_hashes(_PROMPTS_DIR),
-        model=eval_config.model,
-        seed=eval_config.seed,
-        config=eval_config,
-        agent_git_sha=agent_git_sha(Path.cwd()),
-        started_at=time.time(),
-    )
-    manifest_out = out_dir / f"{config}.manifest.json"
-    write_run_manifest(manifest, manifest_out)
-
+    all_results: list[RepoResult] = []
     store = ResultStore(results_db)
     try:
-        results = run_corpus(
-            specs,
-            work_root=work_root,
-            sandbox=DockerSandbox(),
-            model_client=model_client,
-            config=eval_config,
-            split=split,  # type: ignore[arg-type]
-            resume=ResumeContext(store=store, corpus_sha=c_sha),
-            max_workers=max_workers,
-            total_usd_cap=total_usd_cap,
-            clone_cache_root=clone_cache_root,
-        )
+        for seed in seed_list:
+            eval_config = replace(base_config, seed=seed)
+            model_client = _build_model_client(eval_config)
+
+            manifest = RunManifest(
+                corpus_sha=c_sha,
+                prompt_hashes=build_prompt_hashes(_PROMPTS_DIR),
+                model=eval_config.model,
+                seed=eval_config.seed,
+                config=eval_config,
+                agent_git_sha=agent_git_sha(Path.cwd()),
+                started_at=time.time(),
+            )
+            manifest_name = (
+                f"{config}.manifest.json"
+                if len(seed_list) == 1
+                else f"{config}.seed{seed}.manifest.json"
+            )
+            manifest_out = out_dir / manifest_name
+            write_run_manifest(manifest, manifest_out)
+
+            results = run_corpus(
+                specs,
+                work_root=work_root,
+                sandbox=DockerSandbox(),
+                model_client=model_client,
+                config=eval_config,
+                split=split,  # type: ignore[arg-type]
+                resume=ResumeContext(store=store, corpus_sha=c_sha),
+                max_workers=max_workers,
+                total_usd_cap=total_usd_cap,
+                clone_cache_root=clone_cache_root,
+            )
+
+            write_run_manifest(replace(manifest, ended_at=time.time()), manifest_out)
+            all_results.extend(results)
     finally:
         store.close()
 
-    write_run_manifest(replace(manifest, ended_at=time.time()), manifest_out)
-    write_results_table(results, out_dir / f"{config}.md", config_name=eval_config.name)
+    write_results_table(all_results, out_dir / f"{config}.md", config_name=base_config.name)
 
-    full_green = sum(1 for r in results if r.full_green)
-    typer.echo(f"{len(results)} repos scored — {full_green} full green")
+    full_green = sum(1 for r in all_results if r.full_green)
+    typer.echo(
+        f"{len(all_results)} repo x seed runs scored across {len(seed_list)} seed(s) "
+        f"— {full_green} individually full green"
+    )
 
 
 if __name__ == "__main__":

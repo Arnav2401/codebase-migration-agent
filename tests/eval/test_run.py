@@ -118,6 +118,42 @@ def test_main_exits_with_code_1_when_docker_is_missing(
     assert "docker not found" in result.output
 
 
+def test_main_rejects_a_non_integer_seeds_list(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+
+    result = runner.invoke(
+        app, ["--config", "graph", "--seeds", "0,abc", "--configs-dir", str(configs_dir)]
+    )
+
+    assert result.exit_code != 0
+
+
+def test_main_rejects_an_empty_seeds_list(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+
+    result = runner.invoke(
+        app, ["--config", "graph", "--seeds", " , ", "--configs-dir", str(configs_dir)]
+    )
+
+    assert result.exit_code != 0
+
+
+def test_main_rejects_duplicate_seeds(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+
+    result = runner.invoke(
+        app, ["--config", "graph", "--seeds", "0,1,0", "--configs-dir", str(configs_dir)]
+    )
+
+    assert result.exit_code != 0
+
+
 def test_every_shipped_config_loads_as_a_valid_eval_config() -> None:
     # configs/*.json (docs/decisions.md D64) must actually parse -- a typo here would
     # only be caught by a live `make eval` run otherwise.

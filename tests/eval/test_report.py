@@ -6,8 +6,8 @@ from pmigrate.eval.metrics import RepoResult
 from pmigrate.eval.report import write_main_report, write_results_table
 
 
-def _config() -> EvalConfig:
-    return EvalConfig(name="graph", model="gemini-3.6-flash")
+def _config(seed: int = 0) -> EvalConfig:
+    return EvalConfig(name="graph", model="gemini-3.6-flash", seed=seed)
 
 
 def _result(
@@ -18,10 +18,11 @@ def _result(
     diff_line_jaccard: float | None = None,
     symbol_precision: float | None = None,
     symbol_recall: float | None = None,
+    seed: int = 0,
 ) -> RepoResult:
     return RepoResult(
         repo_id=repo_id,
-        config=_config(),
+        config=_config(seed=seed),
         pass_rate=pass_rate,
         full_green=full_green,
         iterations=2,
@@ -153,3 +154,60 @@ def test_write_main_report_ci_bounds_bracket_the_point_estimate(tmp_path: Path) 
     # the headline row's pass_rate mean is 0.450 -- confirm it actually appears with a
     # bracketed range next to it, not just a bare number.
     assert "0.450 [" in content
+
+
+def test_write_results_table_aggregates_multiple_seeds_into_one_repo_row(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D72 (eval/run.py --seeds): three seeds of the SAME repo must
+    collapse into one row, not render as three separate repos."""
+    out_path = tmp_path / "graph.md"
+    results = [
+        _result("acme__a", 1.0, True, seed=0),
+        _result("acme__a", 0.5, False, seed=1),
+        _result("acme__a", 1.0, True, seed=2),
+    ]
+
+    write_results_table(results, out_path, config_name="graph")
+
+    content = out_path.read_text()
+    assert "**1 repos (3 repo x seed runs)**" in content
+    # mean of [1.0, 0.5, 1.0] = 0.833..., range [0.5, 1.0], k=3 seeds, 2/3 full green
+    assert "0.833 [0.500, 1.000] (k=3 seeds)" in content
+    assert "2/3" in content
+
+
+def test_write_results_table_renders_a_single_seed_identically_to_before_d72(
+    tmp_path: Path,
+) -> None:
+    """A repo with only one seed's RepoResult must render exactly as it did before
+    seed-variance support existed -- no "(k=1 seeds)" or repo x seed notation anywhere."""
+    out_path = tmp_path / "graph.md"
+    write_results_table([_result("acme__a", 1.0, True)], out_path, config_name="graph")
+
+    content = out_path.read_text()
+    assert "| acme__a | 1.000 | True | 0.1000 | 2 | — | — | — |" in content
+    assert "repo x seed" not in content
+    assert "seeds)" not in content
+
+
+def test_write_main_report_bootstraps_over_per_repo_seed_means_not_raw_rows(
+    tmp_path: Path,
+) -> None:
+    """docs/decisions.md D72: an arm with one repo run under 3 seeds and one repo run
+    under 1 seed has N=2 (repos), not N=4 (raw RepoResult rows) -- the bootstrap CI must
+    resample repos, not repo x seed cells."""
+    out_path = tmp_path / "main.md"
+    results = [
+        _result("acme__a", 1.0, True, seed=0),
+        _result("acme__a", 1.0, True, seed=1),
+        _result("acme__a", 1.0, True, seed=2),
+        _result("acme__b", 0.0, False),
+    ]
+
+    write_main_report({"graph": results}, out_path)
+
+    content = out_path.read_text()
+    assert "| graph | 2 |" in content  # N=2 repos, not 4 raw rows
+    # per-repo means are [1.0, 0.0] -> arm mean pass_rate 0.5, not (1+1+1+0)/4 = 0.75
+    assert "0.500 [" in content
