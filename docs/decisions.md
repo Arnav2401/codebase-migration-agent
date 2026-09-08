@@ -4496,6 +4496,52 @@ most runs through and looked better in a demo."
 
 ---
 
+## D95 — Dashboard: a static page over a SQLite index, and the diff viewer the trace cannot support
+
+**The index** (`trace/index.py`) is a derived, throw-away read model over the JSONL traces,
+which stay the source of truth. `rebuild` drops and repopulates rather than migrating,
+because nothing in it is worth preserving that the traces cannot regenerate — and an
+append-only text file survives a schema change, a killed process and a half-written row,
+all three of which this project has produced. A trace that fails to parse is skipped rather
+than aborting the rebuild: one corrupt file must not make the dashboard unavailable for
+every other run.
+
+**Deviation from the spec, deliberate.** phase-6-trace-pr.md suggests "small FastAPI + HTMX
+or Streamlit page"; this renders one self-contained HTML file instead. The spec's own
+justification for the feature is that "a screenshot in the README does more recruiting work
+than the code" — which a committed artifact serves directly, with no server to run, nothing
+added to a dependency list already carrying torch as an optional extra, and no risk the
+page exists only while someone is running it. The data is completed history; nothing about
+it needs a request loop.
+
+**The "diff viewer" criterion cannot be met, and the reason is a genuine tension inside
+Phase 6 itself.** 6a's redaction rule forbids storing "full repo contents" in a trace, so
+`patch` events carry file paths and changed-line counts and never diff text. A viewer would
+have to read a working tree that no longer holds that run's state. Rather than quietly drop
+the requirement or weaken the redaction rule to satisfy it, the page says so in its own
+text and points at `pmigrate replay`. Two requirements in one document contradict; the
+redaction one is the one worth keeping.
+
+**Unpriced runs are flagged in the cost view.** A run showing $0.0000 because nothing
+recorded its prices must not read as a cheap run — `cost_breakdown` returns the unpriced
+call count alongside the total, and the page marks those rows "lower bound", continuing
+D90's rule that a missing price is never silently a zero.
+
+**"none collected" is distinguished from "zero passing"** in the run table. A suite that
+produced no outcomes at all (a collection error) is a different failure from one that ran
+and failed, and this project spent real time confusing the two (D85: `pass_rate` pinned at
+0.0 while repair was genuinely progressing, because one collection error means pytest
+collects nothing).
+
+**Interview:** "I built the dashboard as a static generator rather than the FastAPI app the
+plan suggested, because the plan's own reason for wanting it was a README screenshot, and a
+committed HTML file does that without a server or a new dependency. The more interesting
+part was discovering the plan asks for a diff viewer and also forbids storing repo contents
+in the trace — those can't both hold, so the page states the limitation instead of me
+quietly relaxing the redaction rule to get a nicer feature."
+
+---
+
 ## Template
 
 ```

@@ -1,0 +1,63 @@
+<!doctype html><meta charset='utf-8'><title>pmigrate runs</title>
+<style>
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:2rem auto;
+max-width:1100px;color:#1a1a1a;padding:0 1rem}
+h1{margin-bottom:.2rem}h2{margin-top:2.2rem;border-bottom:1px solid #e5e5e5;padding-bottom:.3rem}
+table{border-collapse:collapse;width:100%;margin:.6rem 0}
+th,td{text-align:left;padding:.4rem .6rem;border-bottom:1px solid #eee}
+th{background:#fafafa;font-weight:600}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+.bar{background:#4a7ebb;height:12px;display:inline-block;border-radius:2px}
+.warn{color:#a33;font-weight:600}
+.note{background:#fffbe6;border-left:3px solid #e0c000;padding:.6rem .9rem;margin:1rem 0}
+.muted{color:#777}
+</style>
+<h1>pmigrate — run dashboard</h1>
+<p class='muted'>Generated from the audit traces (docs/decisions.md D90/D95). Every figure here is reconstructed from a run's own JSONL trace, not from the result store.</p>
+<p><strong>14</strong> runs &middot; <strong>$0.0092</strong> total recorded spend</p>
+<h2>Runs</h2>
+<table><tr><th>run</th><th>events</th><th>llm</th><th>tests</th><th>iters</th><th>patches</th><th>errors</th><th>usd</th></tr>
+<tr><td><code>Aiven-Open__rohmu__graph__seed0</code></td><td class='num'>6</td><td class='num'>0</td><td class='num'><span class='muted'>none collected</span></td><td class='num'>0</td><td class='num'>1</td><td class='num'><span class='warn'>1</span></td><td class='num'>$0.0000</td></tr>
+<tr><td><code>Aiven-Open__rohmu__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'><span class='muted'>none collected</span></td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>SupImDos__pydantic-argparse__graph__seed0</code></td><td class='num'>17</td><td class='num'>2</td><td class='num'><span class='muted'>none collected</span></td><td class='num'>2</td><td class='num'>6</td><td class='num'><span class='warn'>1</span></td><td class='num'>$0.0057</td></tr>
+<tr><td><code>SupImDos__pydantic-argparse__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'><span class='muted'>none collected</span></td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>cmudig__draco2__graph__seed0</code></td><td class='num'>6</td><td class='num'>0</td><td class='num'>409/411</td><td class='num'>0</td><td class='num'>1</td><td class='num'><span class='warn'>1</span></td><td class='num'>$0.0000</td></tr>
+<tr><td><code>cmudig__draco2__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'>409/411</td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>eyurtsev__kor__graph__seed0</code></td><td class='num'>9</td><td class='num'>1</td><td class='num'>45/45</td><td class='num'>1</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0016</td></tr>
+<tr><td><code>eyurtsev__kor__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'>45/45</td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>iscc__iscc-core__graph__seed0</code></td><td class='num'>5</td><td class='num'>0</td><td class='num'>315/319</td><td class='num'>0</td><td class='num'>1</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>iscc__iscc-core__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'>315/319</td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>madkote__fastapi-plugins__graph__seed0</code></td><td class='num'>11</td><td class='num'>1</td><td class='num'>28/28</td><td class='num'>2</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0020</td></tr>
+<tr><td><code>madkote__fastapi-plugins__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'>20/20</td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+<tr><td><code>okfn__opendataeditor__graph__seed0</code></td><td class='num'>6</td><td class='num'>0</td><td class='num'>2/92</td><td class='num'>0</td><td class='num'>1</td><td class='num'><span class='warn'>1</span></td><td class='num'>$0.0000</td></tr>
+<tr><td><code>okfn__opendataeditor__t1_only__seed0</code></td><td class='num'>10</td><td class='num'>0</td><td class='num'>2/92</td><td class='num'>0</td><td class='num'>2</td><td class='num'>0</td><td class='num'>$0.0000</td></tr>
+</table>
+<p class='muted'>“none collected” means the suite produced no test outcomes at all — usually a collection error — which is different from zero passing.</p>
+<h2>Cost</h2>
+<table><tr><th>run</th><th>usd</th><th></th></tr>
+<tr><td><code>SupImDos__pydantic-argparse__graph__seed0</code></td><td class='num'>$0.0057</td><td><span class="bar" style="width:220px"></span></td></tr>
+<tr><td><code>madkote__fastapi-plugins__graph__seed0</code></td><td class='num'>$0.0020</td><td><span class="bar" style="width:77px"></span></td></tr>
+<tr><td><code>eyurtsev__kor__graph__seed0</code></td><td class='num'>$0.0016</td><td><span class="bar" style="width:63px"></span></td></tr>
+<tr><td><code>Aiven-Open__rohmu__graph__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>Aiven-Open__rohmu__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>SupImDos__pydantic-argparse__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>cmudig__draco2__graph__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>cmudig__draco2__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>eyurtsev__kor__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>iscc__iscc-core__graph__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>iscc__iscc-core__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>madkote__fastapi-plugins__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>okfn__opendataeditor__graph__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+<tr><td><code>okfn__opendataeditor__t1_only__seed0</code></td><td class='num'>$0.0000</td><td><span class="bar" style="width:2px"></span></td></tr>
+</table>
+<h2>Failure classes</h2>
+<table><tr><th>class</th><th>n</th><th></th></tr>
+<tr><td><code>class_def_error</code></td><td class='num'>10</td><td><span class="bar" style="width:220px"></span></td></tr>
+<tr><td><code>import_error</code></td><td class='num'>8</td><td><span class="bar" style="width:176px"></span></td></tr>
+<tr><td><code>validation_behaviour</code></td><td class='num'>6</td><td><span class="bar" style="width:132px"></span></td></tr>
+<tr><td><code>unknown</code></td><td class='num'>4</td><td><span class="bar" style="width:88px"></span></td></tr>
+<tr><td><code>removed_api</code></td><td class='num'>4</td><td><span class="bar" style="width:88px"></span></td></tr>
+<tr><td><code>preexisting</code></td><td class='num'>3</td><td><span class="bar" style="width:66px"></span></td></tr>
+</table>
+<div class='note'><strong>No diff viewer.</strong> Phase 6a forbids storing full repo contents in a trace, so <code>patch</code> events carry file paths and changed-line counts but never diff text. Rendering diffs here would mean reading a working tree that no longer holds that run's state. Replay a run instead: <code>pmigrate replay &lt;run_id&gt;</code>.</div>

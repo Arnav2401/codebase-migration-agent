@@ -63,7 +63,11 @@ disproportionately strong signal that you know what you're doing.
   verified on a live dev run). Cost accounting is emitted per `llm_call` and replay reports
   a LOWER BOUND when any call lacks a price, but has NOT yet been reconciled against a
   provider invoice.
-- [ ] Dashboard shows runs, timeline, cost, failure classes
+- [~] Dashboard shows runs, timeline, cost, failure classes (D95,
+  `docs/results/dashboard.html`, `pmigrate dashboard`) — built over a SQLite index of the
+  traces. The diff viewer is NOT built: 6a forbids storing repo contents in a trace, so
+  the diff text does not exist to render. The page states that rather than relaxing the
+  redaction rule.
 - [~] A real draft PR opened on your own fork of a corpus repo, body generated from the
   trace — the body generator and the I7 fork-only guard are built, tested and dry-run
   against a real trace (D94, `/tmp/pr_body.md`). NO PR has been opened: pushing to
