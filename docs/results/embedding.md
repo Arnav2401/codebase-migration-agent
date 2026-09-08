@@ -1,12 +1,12 @@
 # Eval results — `embedding`
 
-> **Did not measure embedding retrieval. Do not cite as an embedding result.** All 6 repair
-> calls 429'd (0 applied, $0.00). Numbers are identical to `t1_only` because T1 is all that
-> ran.
+> **Dev, k=1, matched config. 0.396 — and it measured NOTHING (D87).** All 6 repair calls
+> were rate-limited; **0 applied**. The 0.396 is identical to `t1_only` for exactly that
+> reason: T1 is all that ran.
 >
-> The graph-vs-embedding comparison — phase-5-eval.md's "resume claim" — remains
-> **unmeasured** after five attempts across four providers. Per D78 it also faces the prior
-> problem that `graph`'s own repairs moved pass_rate by zero.
+> The graph-vs-embedding comparison — phase-5-eval.md's "resume claim" — is therefore
+> STILL unmeasured, now on the sixth attempt across five providers. Do not read this row as
+> evidence that embedding retrieval performs like the codemods.
 
 **7 repos** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 

@@ -1,10 +1,8 @@
 # Eval results — `no_triage`
 
-> **Did not measure the triage ablation.** All 7 repair calls 429'd (0 applied, $0.00), so
-> `triage=False` had no call to route. T1 alone ran, hence the identical-to-`t1_only` 0.396.
->
-> Phase 4's justification remains unmeasured. Identical numbers here are the tell of an
-> unexercised ablation, not a finding (docs/decisions.md D74).
+> **Dev, k=1, matched config. 0.396 — measured nothing (D87).** All 7 repair calls
+> rate-limited, 0 applied, so `triage=False` had no repair call to route. Identical to
+> `t1_only` for that reason alone. Phase 4's justification remains unmeasured.
 
 **7 repos** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 

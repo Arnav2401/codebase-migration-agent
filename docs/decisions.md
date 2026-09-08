@@ -4111,6 +4111,61 @@ payload size and none of them had the number."
 
 ---
 
+## D87 — Final Phase 5 matrix, and the last held-out run measured nothing new
+
+**The dev matrix, all seven arms under one configuration (D77-scoped):**
+
+| arm | pass_rate | repairs applied | what it means |
+|---|---|---|---|
+| `graph` | **0.542** | 8 | baseline + repair, the finished system |
+| `wholefile` | 0.418 | 1 | |
+| `t1_only` | 0.396 | — (no model) | the codemod floor |
+| `embedding` | 0.396 | **0** | every repair call rate-limited; measured nothing |
+| `no_triage` | 0.396 | **0** | same |
+| `model_gemini` | 0.396 | **14** | most repairs of any arm, zero movement |
+| `no_t1` | 0.266 | 0 | untouched baseline |
+
+**The whole spread rests on two repos.** `Aiven-Open__rohmu` 0.000 -> 0.872 under `graph`
+alone, and `madkote__fastapi-plugins` 0.370 -> 0.519 under `graph` and `wholefile`. Every
+other repo is identical across every arm. So "graph beats wholefile beats embedding" is
+one repo of difference, not a trend, and it must not be read as validating
+phase-5-eval.md's resume claim.
+
+**`embedding` and `no_triage` are not comparable at all** — 0 repairs landed in either, so
+their 0.396 is the "nothing ran" value, identical to `t1_only` for that reason and not
+because those strategies perform like the codemods. This is D74's failure mode surviving to
+the very last run: the binding constraint on this project was always provider quota.
+
+**`model_gemini` is the genuinely interesting row.** It applied 14 repairs — nearly double
+`graph`'s 8 — and moved `pass_rate` by exactly zero. More repair activity is not more
+value; whether the patch is right is what matters, and Gemini's were not (or landed where
+they could not help). That is a cleaner cross-provider result than anything D78 had.
+
+**The last held-out run (3 of 3, I5 budget now exhausted) returned 0.028 — unchanged, and
+uninformative.** Zero repairs executed: `lnbits__lnurl` built its prompt and then hit a 429
+because the five-arm dev sweep immediately beforehand had consumed Groq's budget, and
+`isaacharrisholt__quiffen` produced `repair_no_target` — `extract_target_file` cannot find
+a target in that repo's failure shape at all, which is a real product gap rather than an
+infrastructure one.
+
+**That was my process error, and it cost the last measurement.** I ran the held-out split
+straight after a sweep that had just drained the provider, without checking headroom first
+— the same class of mistake as D75's probing, and worse here because I5 rations these runs
+to three and this was the third. The correct sequence was: finish dev, verify quota has
+recovered, *then* spend the run. The held-out number therefore still describes T1 alone,
+and whether the D85/D86 repair improvement generalizes to unseen repos is **unmeasured and
+now unmeasurable** without a new corpus split or an I5 amendment.
+
+**Interview:** "Dev went from 0.396 to 0.542 once repair actually worked, and the held-out
+number stayed at 0.028 — but not because the fix failed to generalize. Zero repairs ran on
+the held-out repos: one hit a rate limit because I'd just burned the quota on a dev sweep,
+and the other found no repair target at all. I spent the last of three permitted held-out
+runs on a window where the system couldn't demonstrate anything, which is a sequencing
+mistake, not a result. What I'd defend is that the number is reported as-is rather than
+quietly re-run."
+
+---
+
 ## Template
 
 ```

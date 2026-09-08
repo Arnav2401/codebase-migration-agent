@@ -72,13 +72,13 @@ state it. Publish the full per-repo table so nobody has to trust the aggregate.
   measures quota state, not sampling.
 - [x] All seven arms run and produce `docs/results/<arm>.md`
 - [x] `docs/results/main.md` has the headline table with CIs and the per-repo appendix
-- [x] Test split run **once**, at the end, and the number is whatever it is (I5) — runs 1-2
-  of 3 permitted, 2026-09-08. **Held-out pass_rate = 0.028** vs 0.396 on dev
-  (`docs/results/graph.test.md`, docs/decisions.md D83). Run 2 spent on `t1_only` returns
-  the SAME 0.028 repo-for-repo (`docs/results/t1_only.test.md`, D84): on unseen code the
-  whole result is T1's codemods and the LLM tier adds zero. The corpus needed a test split
-  built first (D79 → D82); I5 is now enforced by the harness rather than by memory (D84),
-  with 1 run left.
+- [x] Test split run **once**, at the end, and the number is whatever it is (I5) — runs
+  1-3 of 3; the budget is now EXHAUSTED and enforced by the harness (D84). **Held-out
+  pass_rate = 0.028** on all three runs (`docs/results/graph.test.md`). Run 3, taken after
+  the repair tier was fixed, returned the same 0.028 because zero repairs executed on the
+  held-out repos — one rate-limited, one with no findable target (D87). The held-out number
+  therefore measures T1 alone, and whether the dev improvement (0.396 → 0.542, D85/D86)
+  generalizes is unmeasured and unmeasurable without a new split.
 - [x] Total eval cost measured and reported
 
 ## After this phase
