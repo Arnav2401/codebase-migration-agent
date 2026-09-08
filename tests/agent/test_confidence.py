@@ -6,6 +6,7 @@ from pmigrate.agent.confidence import (
     ConfidenceInputs,
     score,
 )
+from pmigrate.agent.graph import changed_lines
 from pmigrate.types import FailureClass
 
 
@@ -98,3 +99,26 @@ def test_weights_sum_to_one_so_the_score_is_a_fraction() -> None:
 def test_explain_names_the_redistributed_components() -> None:
     s = score(ConfidenceInputs(mechanical_lines=1, model_lines=1, iterations=1))
     assert "unmeasured, weight redistributed" in s.explain()
+
+
+# --- mechanical line counting (docs/decisions.md D93) ---------------------------------
+
+
+def test_changed_lines_counts_both_sides_and_skips_diff_headers() -> None:
+    """Additions AND removals: replacing ten lines with ten others is twenty lines of risk,
+    not zero. `+++`/`---` headers are not content."""
+    diff = (
+        "--- a/x.py\n"
+        "+++ b/x.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        "-old_one\n"
+        "-old_two\n"
+        "+new_one\n"
+        "+new_two\n"
+        " unchanged\n"
+    )
+    assert changed_lines(diff) == 4
+
+
+def test_changed_lines_of_an_empty_diff_is_zero() -> None:
+    assert changed_lines("") == 0

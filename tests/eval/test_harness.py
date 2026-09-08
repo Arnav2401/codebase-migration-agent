@@ -736,3 +736,26 @@ def test_run_corpus_with_trace_root_none_writes_nothing(tmp_path: Path) -> None:
 
     assert results[0].trace_path is None
     assert not traces.exists()
+
+
+def test_mechanical_split_reads_line_counts_from_the_trace(tmp_path: Path) -> None:
+    """docs/decisions.md D93: the confidence score's highest-weight component is derived
+    from the trace, which is what keeps the trace load-bearing rather than decorative."""
+    from pmigrate.eval.calibration import mechanical_split
+    from pmigrate.trace import TraceWriter
+
+    w = TraceWriter("r", trace_root=tmp_path)
+    w.emit("patch", {"source": "T1", "outcome": "applied", "lines_changed": 30})
+    w.emit("patch", {"source": "T2", "outcome": "applied", "lines_changed": 10})
+    w.emit("patch", {"source": "T2", "outcome": "rejected", "lines_changed": 0})
+
+    assert mechanical_split(str(tmp_path / "r.jsonl")) == (30, 10)
+
+
+def test_mechanical_split_is_unmeasured_without_a_trace() -> None:
+    """No trace is not "0% mechanical" -- the component must stay absent so its weight is
+    redistributed rather than reported as a confident zero."""
+    from pmigrate.eval.calibration import mechanical_split
+
+    assert mechanical_split(None) == (None, None)
+    assert mechanical_split("/nonexistent/x.jsonl") == (None, None)

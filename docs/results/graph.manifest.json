@@ -1,5 +1,5 @@
 {
-  "agent_git_sha": "7366ad0fbf960e258e58ed74c38bc5b6809ad2d3",
+  "agent_git_sha": "e3e5b9cc95a909e7728e97eab5d3e166ca72129b",
   "config": {
     "max_prompt_tokens": 6000,
     "model": "openai/gpt-oss-120b",
@@ -15,12 +15,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "15909ae99a8d493621f1569fe001ecf11fb447beeb8b8337677c50fb2f8f958c",
-  "ended_at": 1788864544.7518332,
+  "ended_at": 1788887899.8657,
   "model": "openai/gpt-oss-120b",
   "prompt_hashes": {
     "repair_system.md": "5eaa4f2d25876e5b47ff60e1f29818306a05d6439964f147b2fded4d19e64002"
   },
   "seed": 0,
-  "started_at": 1788863867.589668,
+  "started_at": 1788887475.405905,
   "temperature": 0
 }

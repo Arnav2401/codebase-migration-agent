@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pmigrate.agent.confidence import ConfidenceInputs, score
 from pmigrate.eval.metrics import RepoResult
+from pmigrate.trace import load_events
 from pmigrate.types import FailureClass
 
 
@@ -33,15 +34,39 @@ class Bucket:
         return self.mean_predicted - self.mean_actual
 
 
-def inputs_for(result: RepoResult, *, max_iterations: int = 20) -> ConfidenceInputs:
-    """Derives the score's inputs from a scored result.
+def mechanical_split(trace_path: str | None) -> tuple[int | None, int | None]:
+    """Changed lines written by T1 codemods vs by the model, read from the run's own trace
+    (docs/decisions.md D93).
 
-    `mechanical_lines`/`model_lines` are left None: `RepoResult` records repair ATTEMPTS,
-    not the per-source line counts of the final diff, so the honest move is to report that
-    component unmeasured (its weight is redistributed) rather than to approximate it from
-    attempt counts and call the result a line fraction. Wiring the real numbers means
-    recording them on the trace's patch events -- see D92.
+    The counts live on `patch` events rather than on `RepoResult` deliberately: it keeps the
+    trace load-bearing instead of decorative, which is what I6 claims for it -- if a number
+    in a report can only be produced from the trace, the trace demonstrably contains the run.
+
+    Returns `(None, None)` when there is no trace or it carries no patch events with counts,
+    so the component stays UNMEASURED rather than being reported as a confident 0%.
     """
+    if not trace_path:
+        return (None, None)
+    path = Path(trace_path)
+    if not path.exists():
+        return (None, None)
+    mechanical = model = 0
+    seen = False
+    for event in load_events(path.stem, trace_root=path.parent):
+        if event.kind != "patch" or "lines_changed" not in event.payload:
+            continue
+        seen = True
+        n = int(event.payload.get("lines_changed") or 0)
+        if event.payload.get("source") == "T1":
+            mechanical += n
+        else:
+            model += n
+    return (mechanical, model) if seen else (None, None)
+
+
+def inputs_for(result: RepoResult, *, max_iterations: int = 20) -> ConfidenceInputs:
+    """Derives the score's inputs from a scored result, reading the diff composition back
+    out of its trace (D93)."""
     counts: Counter[FailureClass] = Counter(result.final_diagnosis_counts)
 
     # "Few iterations" is ambiguous, and the first calibration run showed it dominating the
@@ -54,8 +79,11 @@ def inputs_for(result: RepoResult, *, max_iterations: int = 20) -> ConfidenceInp
     # run went green, or it made at least one repair attempt. Otherwise it is unmeasured
     # and its weight is redistributed, rather than being read as a confident "converged
     # fast". Not a weight tweak -- the component genuinely has no content in that case.
+    mechanical_lines, model_lines = mechanical_split(result.trace_path)
     engaged = result.full_green or bool(result.scored_repairs)
     return ConfidenceInputs(
+        mechanical_lines=mechanical_lines,
+        model_lines=model_lines,
         iterations=result.iterations if engaged else 0,
         max_iterations=max_iterations if engaged else 0,
         diagnosis_counts=counts,

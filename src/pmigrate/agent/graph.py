@@ -103,6 +103,21 @@ def _failing_node_ids(outcomes: tuple[TestOutcome, ...]) -> list[str]:
     return [o.node_id for o in outcomes if o.status in ("failed", "error")]
 
 
+def changed_lines(diff: str) -> int:
+    """Content lines a unified diff adds or removes, excluding its `+++`/`---` headers.
+
+    Feeds the confidence score's `mechanical` component (docs/decisions.md D93), which asks
+    what fraction of the final diff a deterministic codemod wrote versus the model. Counting
+    both additions and removals -- rather than net change -- because a rewrite that replaces
+    ten lines with ten different lines is twenty lines of risk, not zero.
+    """
+    return sum(
+        1
+        for line in diff.splitlines()
+        if (line.startswith(("+", "-")) and not line.startswith(("+++", "---")))
+    )
+
+
 def _module_name_from_path(path: str) -> str:
     # Display-only label for Edit records (grouping in demo/trace output) — NOT the
     # resolver's fqname (graph/resolver.py's _path_to_fqname, which handles src/ layout
@@ -261,6 +276,7 @@ def build_migration_graph(
                 "files_changed": sorted({f for e in t1_edits for f in e.files_changed}),
                 "rules_fired": sorted({r.rule_id for e in t1_edits for r in e.rule_edits}),
                 "files_scanned": len(all_paths),
+                "lines_changed": sum(changed_lines(e.diff) for e in t1_edits),
             },
         )
         log.info(
@@ -546,6 +562,10 @@ def build_migration_graph(
                     "strategy": chosen.diagnosis.strategy if chosen else None,
                     "violations": [v.message for v in result.violations],
                     "stderr": result.stderr,
+                    # Only counted when the patch actually landed: a rejected diff changed
+                    # nothing on disk, so counting it would inflate the model's share of a
+                    # diff it never contributed to.
+                    "lines_changed": changed_lines(diff_text) if result.applied else 0,
                 },
                 # NO usd here: the spend is already on the llm_call event that produced
                 # this patch, and replay sums usd across ALL events. Attaching it to both

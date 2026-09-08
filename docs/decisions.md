@@ -4401,6 +4401,51 @@ no number at all."
 
 ---
 
+## D93 — Measuring the mechanical fraction made the confidence score worse
+
+**What was built.** `changed_lines` counts a unified diff's content lines (both sides — a
+rewrite swapping ten lines for ten others is twenty lines of risk, not zero), the graph
+emits `lines_changed` per `source` on every `patch` event, and `mechanical_split` reads
+them back out of the run's own trace. That last choice is deliberate: deriving a reported
+number *only* from the trace is what keeps the trace load-bearing rather than decorative,
+which is the claim I6 makes for it.
+
+**It made calibration worse.** Middle bucket +0.14 → +0.50; every bucket over-confident:
+
+| bucket | n | predicted | actual | gap |
+|---|---|---|---|---|
+| 0.25-0.50 | 6 | 0.415 | 0.080 | +0.34 |
+| 0.50-0.75 | 5 | 0.652 | 0.157 | +0.50 |
+| 0.75-1.00 | 38 | 0.943 | 0.462 | +0.48 |
+
+**Because the formula's premise is false here.** phase-6-trace-pr.md gives "fraction of
+changed lines from mechanical codemods" the largest weight, reasoning that deterministic
+codemods are more trustworthy than model-written code. Deterministic is not correct, and
+this project had already measured the counter-example without connecting it: D84 showed T1
+BREAKS `eyurtsev__kor` (0.955 → 0.506). Under the formula that repo is 100% mechanical
+(37 T1 lines, 0 model) and scores **1.000** confidence. `Aiven-Open__rohmu` under `t1_only`
+is worse — 93 T1 lines, 0 model, confidence **1.000**, actual **0.000**.
+
+**The component is measured correctly and means the wrong thing.** That distinction is
+worth keeping separate from a bug: the counts are right, the trace round-trips, the tests
+pass. What is wrong is the inference from "a codemod wrote this" to "this is likely
+correct".
+
+**Why I did not fix it by reweighting.** The signal that would actually predict confidence
+is whether the codemods helped — which is the pass rate, the thing being predicted, and
+unavailable at PR time when the score must be produced. Dropping `mechanical` to a small
+weight would improve this plot on seven repos and encode nothing real. Reported as a
+limitation of the task rather than tuned away, consistent with D92.
+
+**Interview:** "I implemented the spec's highest-weight component faithfully, measured it,
+and the calibration got worse — the middle bucket went from +0.14 to +0.50 over-confident.
+The reason is that the formula assumes a deterministic codemod is trustworthy, and I'd
+already measured a repo where my codemods break it: it's 100% mechanical, scores 1.0
+confidence, and passes half its tests. The component is measured correctly and means the
+wrong thing, which is a different bug from getting the number wrong."
+
+---
+
 ## Template
 
 ```

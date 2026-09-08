@@ -1,31 +1,30 @@
 # Confidence calibration
 
-> **The score ranks, but it does not calibrate — and it is over-confident exactly where it
-> claims most certainty (docs/decisions.md D92).** Actual pass rate does rise with predicted
-> confidence (0.02 → 0.15 → 0.50 → 0.44), so the score carries *some* signal. But the
-> top bucket holds 37 of 51 runs at a mean predicted 0.946 against a mean actual 0.442, a
-> +0.504 gap. A tool that opened PRs on this score would open them confidently and be wrong
-> more than half the time.
+> **Making the highest-weight component measurable made calibration WORSE, and that is the
+> finding (docs/decisions.md D93).** `mechanical` (weight 0.40) is now derived from real
+> per-source changed-line counts on the trace instead of being unmeasured. The middle
+> bucket's gap went from +0.14 to +0.50, and every bucket is over-confident.
 >
-> **The cause is measurement coverage, not weighting.** `mechanical` (weight 0.40) and
-> `symbol_coverage` (0.15) are both unmeasured here — 55% of the intended signal — so the
-> score collapses onto `easy_classes`, which is high whenever failures are import errors,
-> which they usually are. The weights were NOT tuned to close the gap: doing that would fit
-> the dev split and produce a well-behaved plot with no more real content.
+> **The formula's premise is false on this corpus.** phase-6-trace-pr.md weights "fraction
+> of changed lines from mechanical codemods" most heavily, on the reasoning that
+> deterministic codemods are more trustworthy than model-written code. But deterministic is
+> not the same as correct, and this project has already measured the counter-example:
+> D84 showed T1 BREAKS `eyurtsev__kor`, dropping it 0.955 → 0.506. Under the formula that
+> repo is 100% mechanical (37 T1 lines, 0 model) and scores confidence **1.000** against an
+> actual 0.506. `Aiven-Open__rohmu` under `t1_only` is the starkest: 93 T1 lines, 0 model,
+> confidence **1.000**, actual **0.000**.
 >
-> **The concrete fix** is to make `mechanical` measurable by recording per-source changed-line
-> counts on the trace's `patch` events (they already carry `source` and `files_changed`), then
-> deriving the fraction from the trace rather than leaving it None. That is the highest-weight
-> component and the one that most directly separates "deterministic codemod did this" from
-> "the model wrote this freehand" — the distinction D85 showed matters most.
+> So the component is measured correctly and means the wrong thing. A trustworthy score
+> would need a signal about whether the codemods *helped* — which is the pass rate itself,
+> and therefore unavailable at PR time, when the score has to be produced. That is a real
+> limitation of predicting confidence for this task, not a tuning problem.
 
 Confidence calibration (predicted vs actual pass rate)
 
       bucket    n  predicted   actual     gap  plot
-0.00-0.25    1      0.000    0.022  -0.022  |PA                                       |
-0.25-0.50    9      0.412    0.153  +0.260  |      A         P                        |
-0.50-0.75    4      0.642    0.497  +0.144  |                    A     P              |
-0.75-1.00   37      0.946    0.442  +0.504  |                  A                   P  |
+0.25-0.50    6      0.415    0.080  +0.335  |   A             P                       |
+0.50-0.75    5      0.652    0.157  +0.495  |      A                   P              |
+0.75-1.00   38      0.943    0.462  +0.481  |                  A                   P  |
 
 P = mean predicted confidence, A = mean actual pass rate, * = they coincide.
 Positive gap = OVER-confident, the direction that matters for opening PRs.
