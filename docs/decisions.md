@@ -4347,6 +4347,60 @@ the code as a comment: cost lives on exactly one event kind, the call that incur
 
 ---
 
+## D92 — The confidence score is defined and calibrated; calibration says it is over-confident
+
+**Built to the spec's formula** (phase-6-trace-pr.md), with one deliberate departure:
+components that cannot be measured are reported as missing and their weight is
+**redistributed** across the rest, not contributed as 0.0. Scoring an unmeasured component
+as zero would subtract a constant from every prediction — that is a different, wrong scale
+rather than "less confident", and it would make the calibration plot look well-behaved
+while being uniformly shifted. Same principle as D71 and D57.
+
+**The calibration, run over 51 real dev results:**
+
+| bucket | n | predicted | actual | gap |
+|---|---|---|---|---|
+| 0.00-0.25 | 1 | 0.000 | 0.022 | -0.02 |
+| 0.25-0.50 | 9 | 0.412 | 0.153 | +0.26 |
+| 0.50-0.75 | 4 | 0.642 | 0.497 | +0.14 |
+| 0.75-1.00 | **37** | 0.946 | 0.442 | **+0.50** |
+
+Actual pass rate does rise with predicted confidence, so the score ranks. It does not
+calibrate: the largest bucket holds most of the corpus at 0.946 predicted against 0.442
+actual. A tool opening PRs on this score would be confident and wrong more than half the
+time — which is exactly what a calibration report is for, and exactly the thing an
+uncalibrated "confidence: 0.95" in a PR body would have hidden.
+
+**One real defect found and fixed by calibrating.** The first run scored
+`SupImDos__pydantic-argparse` at 0.933 predicted against 0.000 actual, because it finished
+in one iteration. "Few iterations" is ambiguous: the run either fixed everything at once or
+never engaged — no findable target, or every model call rate-limited. The iterations axis is
+now only measured when the loop actually did something (`full_green` or at least one repair
+attempt); otherwise it is unmeasured and redistributed. That closed the middle bucket's gap
+from +0.33 to +0.14. It is not a weight tweak — the component genuinely has no content when
+the loop never ran.
+
+**Why the weights were NOT tuned to close the remaining gap.** The spec says "calibrate the
+weights on the dev split", and I stopped short of it deliberately: with `mechanical` (0.40)
+and `symbol_coverage` (0.15) both unmeasured, 55% of the intended signal is absent, so any
+weights fitted now would be fitting noise on the 45% that remains, on the same 7 repos every
+other number here comes from. Tuning would produce a flattering plot with no more content.
+
+**The fix that would actually help** is making `mechanical` measurable: the trace's `patch`
+events already carry `source` and `files_changed`, so recording changed-line counts per
+source would let the fraction be derived from the trace. That is the highest-weight
+component and the one that separates "a deterministic codemod did this" from "the model
+wrote this freehand" — the distinction D85 showed matters most.
+
+**Interview:** "The score ranks runs correctly but is badly over-confident — the top bucket
+is 0.95 predicted against 0.44 actual. I could have closed that by fitting the weights on
+the dev split, and I didn't, because the two highest-weight inputs aren't measurable yet, so
+I'd have been fitting noise on seven repos. The calibration plot earns its place precisely
+by saying the number isn't trustworthy yet: an uncalibrated 0.95 in a PR body is worse than
+no number at all."
+
+---
+
 ## Template
 
 ```

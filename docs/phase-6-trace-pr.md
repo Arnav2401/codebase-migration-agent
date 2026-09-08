@@ -65,4 +65,7 @@ disproportionately strong signal that you know what you're doing.
   provider invoice.
 - [ ] Dashboard shows runs, timeline, cost, failure classes
 - [ ] A real draft PR opened on your own fork of a corpus repo, body generated from the trace
-- [ ] Confidence score defined, calibrated, and its calibration plotted
+- [x] Confidence score defined, calibrated, and its calibration plotted (D92,
+  `docs/results/calibration.md`). The plot's finding is that the score RANKS but is
+  over-confident (+0.50 in the top bucket); weights were deliberately not fitted to the
+  dev split while 55% of the formula's inputs remain unmeasurable.
