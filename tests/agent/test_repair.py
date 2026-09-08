@@ -6,6 +6,7 @@ from pmigrate.agent.repair import (
     collect_failure_texts,
     extract_rewritten_files,
     extract_target_file,
+    files_in_traceback,
     find_related_files,
     repair_system_prompt,
     target_exceeds_budget,
@@ -291,3 +292,56 @@ def test_repair_system_prompt_is_loaded_from_a_real_file_not_inlined() -> None:
     prompt = repair_system_prompt()
     assert "pydantic" in prompt.lower()
     assert len(prompt) > 50
+
+
+# --- traceback-chain context (docs/decisions.md D85) ---------------------------------
+
+_IMPORT_CHAIN_TRACEBACK = """\
+ImportError while loading conftest '/repo/tests/conftest.py'.
+tests/conftest.py:19: in <module>
+    from pkg.argparse import actions
+src/pkg/__init__.py:12: in <module>
+    from pkg.argparse import ArgumentParser
+src/pkg/parsers/boolean.py:20: in <module>
+    from pkg import utils
+src/pkg/utils/arguments.py:12: in <module>
+    def name(field: pydantic.fields.ModelField) -> str:
+E   AttributeError: module 'pydantic' has no attribute 'fields'\
+"""
+
+
+def _write(root: Path, rel: str) -> None:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text("x = 1\n")
+
+
+def test_files_in_traceback_returns_the_chain_nearest_error_first(tmp_path: Path) -> None:
+    for rel in (
+        "tests/conftest.py",
+        "src/pkg/__init__.py",
+        "src/pkg/parsers/boolean.py",
+        "src/pkg/utils/arguments.py",
+    ):
+        _write(tmp_path, rel)
+
+    found = files_in_traceback((_IMPORT_CHAIN_TRACEBACK,), tmp_path)
+
+    # nearest-the-error first, so PromptBudget drops the least relevant if it must
+    assert found[0] == "src/pkg/utils/arguments.py"
+    assert "src/pkg/parsers/boolean.py" in found
+    assert "src/pkg/__init__.py" in found
+    assert "tests/conftest.py" not in found  # I1: never hand the agent a test file
+
+
+def test_files_in_traceback_excludes_the_target_and_missing_files(tmp_path: Path) -> None:
+    _write(tmp_path, "src/pkg/utils/arguments.py")  # the only one that exists on disk
+
+    found = files_in_traceback(
+        (_IMPORT_CHAIN_TRACEBACK,), tmp_path, exclude_path="src/pkg/utils/arguments.py"
+    )
+
+    assert found == ()  # target excluded; the rest are not real files here
+
+
+def test_files_in_traceback_is_empty_when_no_frames_match(tmp_path: Path) -> None:
+    assert files_in_traceback(("some assertion failure, no paths",), tmp_path) == ()

@@ -341,3 +341,46 @@ def test_nvidia_from_env_raises_when_key_missing(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     with pytest.raises(ValueError, match="NVIDIA_API_KEY not set"):
         NvidiaModelClient.from_env()
+
+
+# --- Groq reports TPM overage as 413, not 429 (docs/decisions.md D86) -----------------
+
+
+def test_groq_retries_a_413_that_is_really_a_rate_limit() -> None:
+    """Measured live: `413 Payload Too Large` with code `rate_limit_exceeded` and the
+    message `on tokens per minute (TPM): Limit 8000, Requested 8162`. D75 read the HTTP
+    status literally and built a size cap for what is actually a pacing problem; treating
+    it as fatal threw away half of one run's repair attempts."""
+    limited = _response(
+        status_code=413,
+        error={"code": "rate_limit_exceeded", "message": "tokens per minute (TPM): Limit 8000"},
+    )
+    ok = _response(
+        choices=[{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1},
+    )
+    client = GroqModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", side_effect=[limited, ok]) as post,
+        patch("pmigrate.agent.model_client.time.sleep"),
+    ):
+        result = client.complete(system="sys", prompt="prompt")
+
+    assert result.text == "OK"
+    assert post.call_count == 2
+
+
+def test_groq_does_not_retry_a_genuine_413() -> None:
+    """A real oversize request is refused earlier by `target_exceeds_budget`; if one still
+    reaches the API it must fail fast rather than burn the retry budget."""
+    oversize = _response(status_code=413, error={"code": "request_too_large"})
+    oversize.raise_for_status.side_effect = RuntimeError("HTTP 413")
+    client = GroqModelClient(api_key="test-key")
+    with (
+        patch("pmigrate.agent.model_client.requests.post", return_value=oversize) as post,
+        patch("pmigrate.agent.model_client.time.sleep"),
+        pytest.raises(RuntimeError, match="413"),
+    ):
+        client.complete(system="sys", prompt="prompt")
+
+    assert post.call_count == 1

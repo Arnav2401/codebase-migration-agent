@@ -203,6 +203,30 @@ _GROQ_PRICE_PER_TOKEN_USD: dict[str, dict[str, float]] = {
 }
 
 
+def _is_retryable_rate_limit(resp: requests.Response) -> bool:
+    """True for a plain 429, and ALSO for Groq's 413 (docs/decisions.md D86).
+
+    Groq reports a tokens-per-minute overage as `413 Payload Too Large` with
+    `"code": "rate_limit_exceeded"` in the body — measured live:
+    `Request too large ... on tokens per minute (TPM): Limit 8000, Requested 8162`.
+    Read as its HTTP status alone that looks like a permanent "your request is too big",
+    which is how D75 originally diagnosed it and why it built a size cap for what is
+    really a pacing problem. It is retryable: waiting for the TPM window to roll over
+    fixes it, and treating it as fatal threw away half of one run's repair attempts.
+
+    A genuine oversize request is still not retried — that path is `target_exceeds_budget`
+    in `agent/repair.py`, which refuses BEFORE spending a request at all."""
+    if resp.status_code == 429:
+        return True
+    if resp.status_code != 413:
+        return False
+    try:
+        payload: dict[str, Any] = resp.json()
+        return bool(payload.get("error", {}).get("code") == "rate_limit_exceeded")
+    except ValueError:
+        return False
+
+
 @dataclass
 class GroqModelClient:
     """Talks to Groq's OpenAI-compatible chat/completions endpoint (docs/decisions.md D48)
@@ -264,7 +288,7 @@ class GroqModelClient:
                 json=body,
                 timeout=120,
             )
-            if resp.status_code != 429 or attempt == self._MAX_RETRIES:
+            if not _is_retryable_rate_limit(resp) or attempt == self._MAX_RETRIES:
                 return resp
             # Groq's own Retry-After (seconds) when present; a short fixed fallback
             # otherwise — observed live 429s recovered within a few seconds, not minutes.

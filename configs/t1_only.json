@@ -8,5 +8,5 @@
   "triage": true,
   "seed": 0,
   "usd_cap_per_repo": 5.0,
-  "max_prompt_tokens": 40000
+  "max_prompt_tokens": 6000
 }

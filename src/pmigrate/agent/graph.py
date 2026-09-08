@@ -31,6 +31,7 @@ from pmigrate.agent.repair import (
     build_repair_prompt,
     extract_rewritten_files,
     extract_target_file,
+    files_in_traceback,
     find_related_files,
     repair_system_prompt,
     target_exceeds_budget,
@@ -375,10 +376,36 @@ def build_migration_graph(
 
         find_related = retrieval.related_files if retrieval is not None else find_related_files
         related_paths = find_related(target_path, target_before, overlay_root)
-        paths = (target_path, *related_paths)
+        # docs/decisions.md D85: the retrieval strategies answer "what does this file
+        # depend on" structurally, which finds nothing for an import-chain collection
+        # error -- those files are related by imports, not inheritance or similarity.
+        # The traceback already names the whole chain, so add it. Measured live: the
+        # chain is 8 files deep on SupImDos__pydantic-argparse, and repair was fixing
+        # one per iteration while pass_rate stayed 0.0 (a single collection error means
+        # pytest collects nothing, so partial progress is invisible until the chain is
+        # whole). Appended AFTER retrieval's own picks so PromptBudget drops these
+        # first if it must -- retrieval's answer stays authoritative.
+        chain_paths = files_in_traceback(
+            tuple(failure_texts), overlay_root, exclude_path=target_path
+        )
+        seen = {target_path, *related_paths}
+        paths = (target_path, *related_paths, *(p for p in chain_paths if p not in seen))
         before_by_path = {p: (overlay_root / p).read_text() for p in paths}
         built = build_repair_prompt(
             before_by_path, failure_texts, target_path=target_path, budget=prompt_budget
+        )
+        # Payload size has been guessed at across three separate decisions (D75's
+        # unvalidated 40000, D86's measured cap) while nothing ever logged what was
+        # actually sent. Logged unconditionally so the next payload question is answered
+        # from the trace instead of by inference.
+        log.info(
+            "agent.repair_prompt_built",
+            repo_id=state.repo.repo_id,
+            path=target_path,
+            prompt_chars=len(built.text),
+            est_tokens=len(built.text) // 4,
+            n_files=len(before_by_path),
+            trace_id=state.trace_id,
         )
         if built.dropped_files or built.failure_chars_dropped:
             # A repair that failed on trimmed context must be distinguishable from one

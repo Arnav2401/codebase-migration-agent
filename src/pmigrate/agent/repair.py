@@ -39,6 +39,8 @@ _VALIDATION_ERROR_CLASS = re.compile(r"validation errors? for (\w+)")
 _CLASS_DEF = re.compile(r"^class (\w+)\b")
 _FENCED_FILE_BLOCK = re.compile(r"File:\s*(\S+)\s*\n```(?:python)?\n(.*?)```", re.DOTALL)
 _MODULE_NOT_FOUND = re.compile(r"ModuleNotFoundError: No module named")
+# Leading path of a pytest traceback frame: "src/pkg/mod.py:12: in <module>".
+_TRACEBACK_FRAME_PATH = re.compile(r"^\s*([\w./-]+\.py):\d+: in ", re.MULTILINE)
 
 # Pydantic/stdlib bases that are never going to be "the file that actually needs fixing" —
 # excluded so find_related_files doesn't waste a repo-wide grep chasing them.
@@ -147,6 +149,37 @@ def find_related_files(target_path: str, before: str, repo_root: Path) -> tuple[
         return ()
     found = _find_class_definitions(base_names, repo_root, exclude_path=target_path)
     return tuple(sorted(set(found.values())))
+
+
+def files_in_traceback(
+    failure_texts: tuple[str, ...], repo_root: Path, *, exclude_path: str | None = None
+) -> tuple[str, ...]:
+    """Every first-party source file named in these tracebacks, nearest-to-the-error first
+    (docs/decisions.md D85).
+
+    `find_related_files` above follows base-class inheritance, which is the right context
+    for a ValidationError but finds NOTHING for an import-chain collection error: the files
+    are related by imports, not inheritance. Yet the traceback lists the entire chain
+    explicitly, and measured live on `SupImDos__pydantic-argparse`, that chain is 8 files
+    deep -- repair was fixing exactly one per iteration, each fix revealing the next, while
+    `pass_rate` stayed pinned at 0.0 because a single collection error means pytest collects
+    NOTHING. Handing the model the whole chain lets one attempt fix what previously took
+    more iterations than the budget allows.
+
+    Test files are excluded (I1: the agent never edits tests), as is `exclude_path` (the
+    caller's own target, listed separately and first). Order is reversed because a
+    traceback runs outermost-caller to innermost-error, and the file that actually failed
+    is the most important context -- so it survives if `PromptBudget` has to drop files.
+    """
+    seen: list[str] = []
+    for text in failure_texts:
+        for match in _TRACEBACK_FRAME_PATH.finditer(text):
+            path = match.group(1)
+            if path in seen or path == exclude_path or is_test_path(path):
+                continue
+            if (repo_root / path).is_file():
+                seen.append(path)
+    return tuple(reversed(seen))
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,8 @@
 {
-  "agent_git_sha": "5007c287d13c591c41bb8bd842d1716154d7536e",
+  "agent_git_sha": "7366ad0fbf960e258e58ed74c38bc5b6809ad2d3",
   "config": {
-    "model": "gemini-3.6-flash",
+    "max_prompt_tokens": 6000,
+    "model": "openai/gpt-oss-120b",
     "name": "graph",
     "retrieval": "graph",
     "seed": 0,
@@ -14,12 +15,12 @@
     "usd_cap_per_repo": 5.0
   },
   "corpus_sha": "15909ae99a8d493621f1569fe001ecf11fb447beeb8b8337677c50fb2f8f958c",
-  "ended_at": null,
-  "model": "gemini-3.6-flash",
+  "ended_at": 1788864544.7518332,
+  "model": "openai/gpt-oss-120b",
   "prompt_hashes": {
-    "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
+    "repair_system.md": "5eaa4f2d25876e5b47ff60e1f29818306a05d6439964f147b2fded4d19e64002"
   },
   "seed": 0,
-  "started_at": 1788861266.555182,
+  "started_at": 1788863867.589668,
   "temperature": 0
 }

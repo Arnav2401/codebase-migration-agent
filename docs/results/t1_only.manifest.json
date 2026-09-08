@@ -1,7 +1,7 @@
 {
-  "agent_git_sha": "81753c93e482191883b74875d292aa620249c854",
+  "agent_git_sha": "7366ad0fbf960e258e58ed74c38bc5b6809ad2d3",
   "config": {
-    "max_prompt_tokens": 40000,
+    "max_prompt_tokens": 6000,
     "model": "openai/gpt-oss-120b",
     "name": "t1_only",
     "retrieval": "graph",
@@ -12,13 +12,13 @@
     "triage": true,
     "usd_cap_per_repo": 5.0
   },
-  "corpus_sha": "cfd07150490c08793a079ff06b493f042c97ba8ae5ea83e21ceae800006d38ad",
-  "ended_at": 1788801877.968823,
+  "corpus_sha": "15909ae99a8d493621f1569fe001ecf11fb447beeb8b8337677c50fb2f8f958c",
+  "ended_at": 1788864637.1747499,
   "model": "openai/gpt-oss-120b",
   "prompt_hashes": {
-    "repair_system.md": "1eb20d22ebcb63512151908c0305d1d2d4a876d1a363b09a986e61ccb82fccaa"
+    "repair_system.md": "5eaa4f2d25876e5b47ff60e1f29818306a05d6439964f147b2fded4d19e64002"
   },
   "seed": 0,
-  "started_at": 1788801821.2172768,
+  "started_at": 1788864579.644605,
   "temperature": 0
 }

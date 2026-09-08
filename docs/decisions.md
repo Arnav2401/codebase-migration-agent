@@ -4011,6 +4011,106 @@ codemods."
 
 ---
 
+## D85 — The repair tier contributes now: prompt knowledge + traceback-chain context
+
+**Result: dev `graph` 0.3965 -> 0.5422**, same config, same corpus, against a `t1_only`
+baseline re-measured under the identical configuration. `Aiven-Open__rohmu` went 0.000 ->
+**0.8718** (pinned at zero for the entire project until now) and
+`madkote__fastapi-plugins` 0.370 -> 0.519. D78 and D84 recorded that the LLM tier added
+exactly nothing; it now adds +0.146 absolute, +37% relative.
+
+**Diagnosis first, because two prior entries guessed.** Running one repo end-to-end with
+the prompt, the model's reply and the before/after test state all captured showed the
+failure was `pydantic.fields.ModelField` — a symbol **deleted** in v2. The model's "fix"
+was to change `import pydantic` to `import pydantic.fields as pf` and write
+`pf.ModelField`: it renamed *how it referenced a name that does not exist*. Annotations
+evaluate at def time, so it failed identically. That is not a capability problem; the
+model was never told what v2 removed.
+
+**Two causes, both fixed:**
+
+1. **The prompt carried no v1->v2 knowledge.** `repair_system.md` said mechanical renames
+   were already done and gave two example causes. It never listed a single removed API, and
+   never mentioned the four cases T1 *deliberately flags for T2* (`@root_validator`,
+   implicit `Optional`, `Config.json_encoders`, `__get_validators__` — see
+   `codemod/rules/*_flag.py`, whose own docstrings say "worth a human or T2 pass"). So
+   repair was handed exactly the hard cases T1 punted, with zero guidance about them. The
+   prompt now carries a removed-vs-renamed table and those four cases.
+
+   One iteration of this was my own error, kept here because it is the point: my first
+   table wrote `pydantic.fields.FieldInfo`, and the model dutifully produced dotted access
+   that fails, because v2's package `__init__` resolves lazily and `pydantic.fields` is
+   itself a dead attribute. Fixed by specifying the import form
+   (`from pydantic.fields import FieldInfo`). Measured after each change rather than
+   assumed: attempt 1 kept the dead symbol, attempt 2 used the right symbol the wrong way,
+   attempt 3 fixed the file.
+
+2. **Context was structurally wrong for import chains.** `find_related_files` follows
+   base-class inheritance (D26/D28's fix for a `ValidationError`), and the retrieval arms
+   answer "what does this file depend on" structurally. For an import-chain collection
+   error both find nothing — those files are related by *imports*, and the traceback
+   already names the whole chain. Measured on `SupImDos__pydantic-argparse`: the chain is
+   8 files deep, repair fixed exactly one per iteration, each fix revealing the next, and
+   `pass_rate` stayed 0.0 the whole time because one collection error means pytest
+   collects nothing, so partial progress is invisible. `files_in_traceback` now adds the
+   chain, nearest-the-error first so `PromptBudget` drops the least relevant first.
+
+**Alternatives:** raise `max_iterations` so the one-file-per-iteration walk can finish —
+rejected: it pays a full test run and model call per file to fix what one prompt can, and
+on a long chain still runs out. Teach `GraphRetrieval` to follow imports — the cleaner home
+long-term, but it changes what the retrieval ablation *means* mid-measurement, and the
+traceback is a more direct signal than the graph for this specific failure shape.
+
+**Interview:** "The repair tier had produced zero measurable value across three providers,
+so I stopped re-running the matrix and instrumented a single repair end-to-end. The model
+was being asked to fix a symbol pydantic deleted in v2, and it renamed how it referenced
+the dead symbol rather than replacing it — because the prompt never told it what v2
+removed. That plus giving it the import chain from the traceback instead of one file per
+iteration took the arm from exactly the codemod baseline to 37% above it. I also got the
+fix wrong once, in a way the measurement caught: my first API table implied dotted access
+that v2's lazy `__init__` doesn't support."
+
+---
+
+## D86 — Groq's `413 Payload Too Large` is a rate limit, and D75 built the wrong fix for it
+
+**Why:** D75 saw `413 Payload Too Large`, read it as a request-size limit, and added
+`PromptBudget` with a cap of 40000 tokens it explicitly admitted was never validated. The
+actual response body says:
+
+    Request too large for model `openai/gpt-oss-120b` ... service tier `on_demand` on
+    tokens per minute (TPM): Limit 8000, Requested 8162
+    "code": "rate_limit_exceeded"
+
+It is a **tokens-per-minute rate limit reported under an HTTP status that reads like a
+size error**, and the client discarded the body via `raise_for_status()`, so nobody ever
+saw the message. Three consequences, all measured:
+
+1. **The cap was ~5x too high.** 40000 tokens cannot fit inside an 8000 TPM budget at all.
+2. **A cap AT 8000 still fails**, because the ~1400-token system prompt counts toward the
+   same budget. Set to 6000, which leaves headroom.
+3. **It was treated as fatal.** `_post_with_retry` retried 429 only, so every TPM overage
+   killed a repair attempt outright — 5 of 10 attempts in one run. Waiting for the window
+   to roll over fixes it, and now does.
+
+Fixing (1) and (2) alone moved dev `graph` from 0.396 to 0.418; adding (3) took it to
+0.5422 (D85), because half the attempts had been thrown away.
+
+**Fixed by** `_is_retryable_rate_limit`, which retries a 413 only when the body says
+`rate_limit_exceeded`. A genuine oversize request still fails fast — and is refused even
+earlier by `target_exceeds_budget`, before a request is spent. Prompt size is now logged on
+every repair (`agent.repair_prompt_built`), because payload size had been guessed at across
+three separate decisions while nothing recorded what was actually sent.
+
+**Interview:** "A 413 that says Payload Too Large is a rate limit at Groq, and we were
+throwing away half our repair attempts on it — the error body said so plainly, but the
+client called `raise_for_status()` and discarded the body before anyone could read it. The
+earlier decision had built a size cap for a pacing problem and picked the number by guess.
+The lesson I actually took was to log what we send: three decisions had reasoned about
+payload size and none of them had the number."
+
+---
+
 ## Template
 
 ```
