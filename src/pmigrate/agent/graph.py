@@ -42,6 +42,7 @@ from pmigrate.codemod.engine import apply_rules
 from pmigrate.codemod.rules import ALL_RULES
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.sandbox.protocol import Sandbox
+from pmigrate.security.injection import scan_for_injection
 from pmigrate.trace.writer import TraceWriter
 from pmigrate.triage.classifier import RuleBasedClassifier
 from pmigrate.triage.collect import collect_raw_failures
@@ -428,6 +429,42 @@ def build_migration_graph(
         seen = {target_path, *related_paths}
         paths = (target_path, *related_paths, *(p for p in chain_paths if p not in seen))
         before_by_path = {p: (overlay_root / p).read_text() for p in paths}
+
+        # Phase 7b: every file about to enter the model's context is scanned, and each hit
+        # is recorded in the trace (an acceptance criterion). Detection does NOT gate the
+        # call -- the real defence is that `apply_patch` enforces I1-I3 at a chokepoint no
+        # repo comment can reach, and the sandbox has no network. Blocking here on a noisy
+        # regex would trade a measurable, contained risk for an unmeasurable one: repairs
+        # silently not attempted.
+        injection_hits = [
+            hit
+            for candidate_path, text in before_by_path.items()
+            for hit in scan_for_injection(candidate_path, text)
+        ]
+        if injection_hits:
+            _trace(
+                "error",
+                {
+                    "where": "repair.prompt_injection_detected",
+                    "message": f"{len(injection_hits)} instruction-shaped span(s) in repo content",
+                    "hits": [
+                        {
+                            "category": h.category,
+                            "path": h.path,
+                            "line": h.line,
+                            "excerpt": h.redacted(),
+                        }
+                        for h in injection_hits[:20]
+                    ],
+                },
+            )
+            log.warning(
+                "agent.prompt_injection_detected",
+                trace_id=state.trace_id,
+                repo_id=state.repo.repo_id,
+                n_hits=len(injection_hits),
+                categories=sorted({h.category for h in injection_hits}),
+            )
         built = build_repair_prompt(
             before_by_path, failure_texts, target_path=target_path, budget=prompt_budget
         )

@@ -63,8 +63,12 @@ defence in depth working.
 ## Acceptance criteria
 
 - [ ] Hostile-fixture suite (Phase 2) passes with the hardened policy
-- [ ] Injection corpus built with ≥10 planted injections across ≥5 repos
-- [ ] Measured resistance rate reported in `docs/results/security.md`, broken down by
-      which layer caught each attempt
-- [ ] Sensitive-path diffs (auth/crypto/secrets/CI) block PR creation, proven by a fixture
-- [ ] Every injection detection appears in the trace
+- [x] Injection corpus built with ≥10 planted injections across ≥5 repos (15 across 5,
+  `tests/fixtures/injection/`)
+- [x] Measured resistance rate reported in `docs/results/security.md`, broken down by
+      which layer caught each attempt — 14/15 (93%), with 8/15 stopped by a code
+      invariant regardless of detection (D96)
+- [x] Sensitive-path diffs (auth/crypto/secrets/CI) block PR creation, proven by a fixture
+      (`pr/sensitive.py`, `tests/security/test_guardrails.py`)
+- [x] Every injection detection appears in the trace (emitted from `repair()`, excerpts
+      truncated to 120 chars)
