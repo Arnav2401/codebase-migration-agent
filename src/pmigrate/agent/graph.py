@@ -42,6 +42,7 @@ from pmigrate.codemod.engine import apply_rules
 from pmigrate.codemod.rules import ALL_RULES
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.sandbox.protocol import Sandbox
+from pmigrate.trace.writer import TraceWriter
 from pmigrate.triage.classifier import RuleBasedClassifier
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import GroupedDiagnosis, group_raw_failures
@@ -127,6 +128,7 @@ def build_migration_graph(
     retrieval: Retrieval | None = None,
     enable_t1: bool = True,
     prompt_budget: PromptBudget | None = None,
+    tracer: TraceWriter | None = None,
 ) -> Any:
     # Any: langgraph's CompiledStateGraph is generic over 4 type params callers never
     # interact with beyond .invoke() — parametrizing it precisely here would add real
@@ -144,6 +146,14 @@ def build_migration_graph(
     # pre-existing fallback path is exactly why `collect_failure_texts` was kept in
     # `agent/repair.py` rather than deleted once D38 stopped calling it directly.
     #
+    # tracer (docs/decisions.md D91): None keeps the pre-Phase-6 behavior exactly, so every
+    # existing test and caller is untouched. When present, every decision this graph makes is
+    # mirrored into the audit trace -- the structlog line stays, because logs are for
+    # watching a run and the trace is for reconstructing one after the fact (I6).
+    def _trace(kind: str, payload: dict[str, Any], **kw: Any) -> None:
+        if tracer is not None:
+            tracer.emit(kind, payload, **kw)  # type: ignore[arg-type]
+
     # retrieval (docs/decisions.md D60): Phase 5's OTHER ablation axis -- what context
     # repair() sends alongside the target file. None (the default) preserves the exact
     # pre-Phase-5 behavior (`find_related_files`'s grep heuristic, D28) unchanged, so
@@ -242,6 +252,17 @@ def build_migration_graph(
             # rules are heuristic (protocol.py's module docstring) and the next
             # run_tests call is what actually judges whether skipping was fine.
 
+        t1_edits = new_edits[len(state.edits) :]
+        _trace(
+            "patch",
+            {
+                "source": "T1",
+                "outcome": "applied",
+                "files_changed": sorted({f for e in t1_edits for f in e.files_changed}),
+                "rules_fired": sorted({r.rule_id for e in t1_edits for r in e.rule_edits}),
+                "files_scanned": len(all_paths),
+            },
+        )
         log.info(
             "agent.edit_t1",
             trace_id=state.trace_id,
@@ -422,6 +443,20 @@ def build_migration_graph(
 
         try:
             response = model_client.complete(system=repair_system_prompt(), prompt=prompt)
+            _trace(
+                "llm_call",
+                {
+                    "purpose": "repair",
+                    "model": getattr(model_client, "model", "?"),
+                    "target": target_path,
+                    "n_files_in_prompt": len(before_by_path),
+                    "prompt_chars": len(built.text),
+                    "dropped_files": list(built.dropped_files),
+                },
+                tokens_in=response.tokens_in,
+                tokens_out=response.tokens_out,
+                usd=response.usd_cost,
+            )
         except Exception as exc:
             # A real ModelClient (unlike FakeModelClient, which by construction never
             # raises) can fail for reasons entirely outside this loop's control — a
@@ -432,6 +467,14 @@ def build_migration_graph(
             # would have crashed `.invoke()` — the same gap D22 already found and fixed
             # one layer down, in codemod rules. `Status` already has "failed" for exactly
             # this outcome; route() below now actually reaches it instead of crashing.
+            _trace(
+                "error",
+                {
+                    "where": "repair.model_call",
+                    "message": str(exc),
+                    "target": target_path,
+                },
+            )
             log.warning(
                 "agent.repair_failed",
                 trace_id=state.trace_id,
@@ -492,6 +535,23 @@ def build_migration_graph(
                         diff=diff_text,
                     )
                 )
+            _trace(
+                "patch",
+                {
+                    "source": "T2",
+                    "outcome": "applied" if result.applied else "rejected",
+                    "files_changed": list(result.files_changed),
+                    "path": path,
+                    "cls": chosen.diagnosis.cls.value if chosen else None,
+                    "strategy": chosen.diagnosis.strategy if chosen else None,
+                    "violations": [v.message for v in result.violations],
+                    "stderr": result.stderr,
+                },
+                # NO usd here: the spend is already on the llm_call event that produced
+                # this patch, and replay sums usd across ALL events. Attaching it to both
+                # would double the reported cost of every repair -- exactly the class of
+                # dishonest number Phase 6's billing-match criterion exists to prevent.
+            )
             log.info(
                 "agent.repair_applied" if result.applied else "agent.repair_rejected",
                 trace_id=state.trace_id,
@@ -545,6 +605,16 @@ def build_migration_graph(
         # These events ARE the raw material Phase 5/6 tooling will later aggregate — the
         # goal here is "don't lose the data", not "build the replay system early".
         passed = sum(1 for o in run.outcomes if o.status == "passed")
+        _trace(
+            "test_run",
+            {
+                "iteration": state.budget.iterations,
+                "passed": sum(1 for o in run.outcomes if o.status == "passed"),
+                "total": len(run.outcomes),
+                "collection_errors": len(run.collection_errors),
+                "duration_s": time.time() - start,
+            },
+        )
         log.info(
             "agent.run_tests",
             trace_id=state.trace_id,
@@ -577,6 +647,14 @@ def build_migration_graph(
             return {"diagnoses": []}
         diagnoses = classifier.classify(state.last_run, state.repo.baseline)
         if diagnoses:
+            _trace(
+                "triage",
+                {
+                    "classes": sorted({d.cls.value for d in diagnoses}),
+                    "preexisting": sum(1 for d in diagnoses if d.cls == FailureClass.PREEXISTING),
+                    "n_diagnoses": len(diagnoses),
+                },
+            )
             log.info(
                 "agent.classify",
                 trace_id=state.trace_id,

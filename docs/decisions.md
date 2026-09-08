@@ -4307,6 +4307,46 @@ shape instead of trusting field names."
 
 ---
 
+## D91 — Trace emission wired into the real run path
+
+**What it does now.** `build_migration_graph` and `run_repo`/`run_corpus` take a
+`TraceWriter`, and a live `t1_only` dev run wrote one trace per repo, replayed cleanly, and
+recorded `trace_path` on every scored `RepoResult`. Two of Phase 6's acceptance criteria
+are met: replay reconstructs a run from its trace alone, and every scored eval run has a
+trace.
+
+**Seven emission points**, each mirroring an existing structlog line rather than replacing
+it: T1 patches, test runs, triage, the repair LLM call, the repair patch (applied or
+rejected), and model-call errors. The log line stays because the two serve different jobs —
+logs are for watching a run happen, the trace is for reconstructing one afterwards (I6).
+
+**Cost is attached to exactly one event kind.** My first version put `usd` on the repair
+`patch` event as well as the `llm_call` that produced it. `replay_timeline` sums `usd`
+across all events, so every successful repair would have reported double its true cost —
+and the total would still have looked plausible, which is precisely the failure Phase 6's
+"cost accounting matches the provider's billing" criterion is meant to catch. Caught by
+reading my own diff, not by a test, which is worth admitting: the test suite would have
+been perfectly happy.
+
+**A failed model call emits `error`, not `llm_call`.** A call that raised produced no
+tokens and no charge, so counting it as an LLM call would inflate the call count and dilute
+any per-call cost average. The error still lands in the trace — it is exactly what you want
+when replaying a run that went nowhere.
+
+**`trace_root=None` disables tracing entirely**, keeping the pre-Phase-6 behavior for any
+caller that wants it, and one unit test pins that. That option exists because the wiring
+first shipped with tests writing into the repository's real `traces/` directory — a live
+`acme__widgets__test__seed0.jsonl` appeared beside genuine run traces. Tests now pass a
+`tmp_path` trace root; an audit record that contains fixtures is not an audit record.
+
+**Interview:** "Wiring the trace in was mostly mechanical, and the one interesting bug was
+mine: I attached the dollar cost to both the LLM call and the patch it produced, so replay
+would have reported double the real spend on every successful repair. Nothing would have
+failed — the number just would have been wrong and plausible. It made me put the rule in
+the code as a comment: cost lives on exactly one event kind, the call that incurred it."
+
+---
+
 ## Template
 
 ```

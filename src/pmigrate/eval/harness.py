@@ -75,6 +75,7 @@ from pmigrate.graph.relevance import compute_work_list
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.graph.resolver import resolve_repo
 from pmigrate.sandbox.protocol import Sandbox
+from pmigrate.trace.writer import DEFAULT_TRACE_ROOT, TraceWriter
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import group_raw_failures
 from pmigrate.types import ImageRef, RepoSpec, SandboxPolicy
@@ -326,6 +327,7 @@ def run_repo(
     budget: BudgetState | None = None,
     failures_out: Path | None = None,
     embedder: Embedder | None = None,
+    trace_root: Path | None = None,
 ) -> RepoResult:
     """Runs the full migration loop against one already-checked-out repo and scores the
     result. `image` is built by the caller (`sandbox.build(repo, "v2")` — the SAME image
@@ -357,6 +359,25 @@ def run_repo(
     resolved = resolve_repo(read_py_files(source_root))
     work_list = compute_work_list(resolved, repo.repo_id)
 
+    # docs/decisions.md D91: one trace per (repo, config, seed) cell, which is the unit
+    # `RepoResult` already describes and the unit `pmigrate replay` is useful at. The run_id
+    # is derived rather than random so a result can be traced back to its file without a
+    # lookup table -- and re-running a cell overwrites nothing, because `run_corpus` clears
+    # the cell first (D63) and the writer appends to a per-cell path.
+    tracer: TraceWriter | None = None
+    if trace_root is not None:
+        run_id = f"{repo.repo_id}__{config.name}__seed{config.seed}"
+        tracer = TraceWriter(run_id, trace_root=trace_root)
+        tracer.emit(
+            "phase",
+            {
+                "name": "run_repo.start",
+                "repo_id": repo.repo_id,
+                "config": config.to_dict(),
+                "pre_sha": repo.pre_sha,
+            },
+        )
+
     graph = build_migration_graph(
         sandbox=sandbox,
         image=image,
@@ -368,6 +389,7 @@ def run_repo(
         retrieval=_build_retrieval(config, repo.repo_id, embedder=embedder),
         enable_t1="T1" in config.tiers,
         prompt_budget=_build_prompt_budget(config),
+        tracer=tracer,
     )
 
     start = time.time()
@@ -383,6 +405,20 @@ def run_repo(
         _dump_residual_failures(repo, final_state, failures_out)
 
     result = score_run(repo, final_state, wallclock_s, config=config)
+    if tracer is not None:
+        # Phase 6 acceptance: "every scored eval run has a trace". Recording the path ON the
+        # result is what makes that checkable after the fact instead of by convention.
+        tracer.emit(
+            "phase",
+            {
+                "name": "run_repo.end",
+                "pass_rate": result.pass_rate,
+                "full_green": result.full_green,
+                "iterations": result.iterations,
+                "usd_spent": result.usd_spent,
+            },
+        )
+        result = replace(result, trace_path=str(tracer.path))
 
     similarity = compute_diff_similarity(repo, source_root, overlay_root, final_state)
     if similarity is not None:
@@ -435,6 +471,7 @@ def _run_one_repo(
     budget_tracker: _GlobalBudgetTracker | None,
     embedder: Embedder | None,
     clone_cache_root: Path,
+    trace_root: Path | None,
 ) -> RepoResult | None:
     """One repo's worth of `run_corpus`'s loop body — factored out so both the sequential
     path (`max_workers=1`, identical control flow to before docs/decisions.md D66) and the
@@ -498,6 +535,7 @@ def _run_one_repo(
             budget=repo_budget,
             failures_out=failures_out,
             embedder=embedder,
+            trace_root=trace_root,
         )
     except Exception as e:
         log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
@@ -535,6 +573,7 @@ def run_corpus(
     max_workers: int = 1,
     total_usd_cap: float | None = None,
     clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
+    trace_root: Path | None = DEFAULT_TRACE_ROOT,
 ) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
@@ -595,6 +634,7 @@ def run_corpus(
                 budget_tracker=budget_tracker,
                 embedder=embedder,
                 clone_cache_root=clone_cache_root,
+                trace_root=trace_root,
             )
             if result is not None:
                 results.append(result)
@@ -618,6 +658,7 @@ def run_corpus(
                 budget_tracker=budget_tracker,
                 embedder=embedder,
                 clone_cache_root=clone_cache_root,
+                trace_root=trace_root,
             )
             for repo in specs
         ]

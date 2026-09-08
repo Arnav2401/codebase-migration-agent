@@ -13,6 +13,7 @@ from pmigrate.agent.retrieval import GraphRetrieval, WholefileRetrieval
 from pmigrate.eval.config import EvalConfig
 from pmigrate.eval.harness import _build_retrieval, checkout_pre_sha, run_corpus, run_repo
 from pmigrate.eval.store import ResultStore, ResumeContext, config_hash
+from pmigrate.trace import load_events, replay_timeline
 from pmigrate.types import (
     BaselineResult,
     ImageRef,
@@ -475,6 +476,7 @@ def test_run_corpus_with_resume_skips_a_cell_already_in_the_store(tmp_path: Path
         config=config,
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
 
     assert results == [existing]
@@ -504,6 +506,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         config=config,
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
     assert len(first) == 1
     assert store.has_result(repo.repo_id, config_hash(config), "deadbeef") is True
@@ -520,6 +523,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         config=config,
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
     assert second == first
 
@@ -580,6 +584,7 @@ def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
         config=_config(),
         max_workers=n_repos,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
     elapsed = time.time() - start
 
@@ -629,6 +634,7 @@ def test_run_corpus_shares_one_embedder_instance_across_concurrent_repos(
         config=config,
         max_workers=n_repos,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
 
     assert len(results) == n_repos
@@ -645,6 +651,7 @@ def test_run_corpus_rejects_a_sub_one_max_workers(tmp_path: Path) -> None:
             config=_config(),
             max_workers=0,
             clone_cache_root=tmp_path / "clone_cache",
+            trace_root=tmp_path / "traces",
         )
         raise AssertionError("expected ValueError")
     except ValueError as e:
@@ -676,8 +683,56 @@ def test_run_corpus_total_usd_cap_stops_starting_new_repos(tmp_path: Path) -> No
         config=config,
         total_usd_cap=3.0,
         clone_cache_root=tmp_path / "clone_cache",
+        trace_root=tmp_path / "traces",
     )
 
     # repo0 runs (spend now >= $2, still < $3 cap when repo1 is CHECKED) -- repo1 runs
     # (spend now >= $4) -- repo2 is skipped, since the cap is checked before it starts.
     assert len(results) == 2
+
+
+def test_run_corpus_writes_a_trace_per_repo_and_records_its_path(tmp_path: Path) -> None:
+    """Phase 6 acceptance: "every scored eval run has a trace" (docs/decisions.md D91).
+    Recording the path ON the RepoResult is what makes that checkable after the fact rather
+    than by convention."""
+    repos = [_clonable_repo_spec(tmp_path, "repo0")]
+    traces = tmp_path / "traces"
+
+    results = run_corpus(
+        repos,
+        work_root=tmp_path / "work",
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=_config(),
+        clone_cache_root=tmp_path / "clone_cache",
+        trace_root=traces,
+    )
+
+    assert len(results) == 1
+    assert results[0].trace_path is not None
+    written = list(traces.glob("*.jsonl"))
+    assert len(written) == 1
+    assert Path(results[0].trace_path).name == written[0].name
+    # and it must actually replay from the file alone
+    summary = replay_timeline(load_events(written[0].stem, trace_root=traces))
+    assert summary.n_events > 0
+
+
+def test_run_corpus_with_trace_root_none_writes_nothing(tmp_path: Path) -> None:
+    """Tracing is opt-out: an explicit None keeps the exact pre-Phase-6 behavior, so a
+    caller that does not want files on disk does not get them."""
+    repos = [_clonable_repo_spec(tmp_path, "repo0")]
+    traces = tmp_path / "traces"
+
+    results = run_corpus(
+        repos,
+        work_root=tmp_path / "work",
+        sandbox=FakeSandbox(responses=[_passed_run()]),
+        model_client=None,
+        config=_config(),
+        clone_cache_root=tmp_path / "clone_cache",
+        trace_root=None,
+    )
+
+    assert results[0].trace_path is None
+    assert not traces.exists()

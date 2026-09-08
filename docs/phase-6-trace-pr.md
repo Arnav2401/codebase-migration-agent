@@ -58,8 +58,11 @@ disproportionately strong signal that you know what you're doing.
 
 ## Acceptance criteria
 
-- [ ] `pmigrate replay <run_id>` reconstructs a full run from its trace alone
-- [ ] Every scored eval run has a trace; cost accounting matches the provider's billing
+- [x] `pmigrate replay <run_id>` reconstructs a full run from its trace alone (D90/D91)
+- [~] Every scored eval run has a trace (D91 — `trace_path` recorded on every `RepoResult`,
+  verified on a live dev run). Cost accounting is emitted per `llm_call` and replay reports
+  a LOWER BOUND when any call lacks a price, but has NOT yet been reconciled against a
+  provider invoice.
 - [ ] Dashboard shows runs, timeline, cost, failure classes
 - [ ] A real draft PR opened on your own fork of a corpus repo, body generated from the trace
 - [ ] Confidence score defined, calibrated, and its calibration plotted
