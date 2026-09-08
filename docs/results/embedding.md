@@ -1,25 +1,28 @@
 # Eval results — `embedding`
 
-> **Dev, k=1, matched config. 0.396 — and it measured NOTHING (D87).** All 6 repair calls
-> were rate-limited; **0 applied**. The 0.396 is identical to `t1_only` for exactly that
-> reason: T1 is all that ran.
+> **This run cannot be compared across arms (docs/decisions.md D102).** `graph`,
+> `embedding` and `wholefile` ran back to back against a shared daily token budget, and
+> repairs landed in strict decreasing order of run position — 7, then 1, then 0, with every
+> failure a 429 against that daily budget. The resulting ranking measures which arm ran
+> first, not which retrieval strategy is better. TPM pacing (D101) eliminated the
+> per-minute 413s entirely, but does nothing about the daily ceiling.
 >
-> The graph-vs-embedding comparison — phase-5-eval.md's "resume claim" — is therefore
-> STILL unmeasured, now on the sixth attempt across five providers. Do not read this row as
-> evidence that embedding retrieval performs like the codemods.
+> `eval/interleave.py` now groups execution by repo so the budget runs out between repos
+> rather than between arms. That measurement has not been taken yet — the day's budget is
+> spent.
 
 **7 repos** — 1 full green (every seed passed), mean pass rate 0.396, total cost $0.00
 
 No confidence interval below — this table reports one arm in isolation. Bootstrap 95% CIs are computed when combining arms into `main.md` (`write_main_report`, a separate step over every arm's own repos).
 
-Diff-similarity (docs/phase-5-eval.md): 0.216 [0.075, 0.376] (n=7/7) line jaccard, 0.541 [0.330, 0.755] (n=7/7) symbol precision, 0.616 [0.380, 0.813] (n=7/7) symbol recall. `—` per repo below means not measured (no human ground-truth diff, or neither side touched a Python file), not a real 0.0.
+Diff-similarity (docs/phase-5-eval.md): 0.181 [0.065, 0.326] (n=7/7) line jaccard, 0.525 [0.330, 0.737] (n=7/7) symbol precision, 0.629 [0.386, 0.826] (n=7/7) symbol recall. `—` per repo below means not measured (no human ground-truth diff, or neither side touched a Python file), not a real 0.0.
 
-| repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall |
-|---|---|---|---|---|---|---|---|
-| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 |
-| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 |
-| cmudig__draco2 | 0.878 | False | 0.0000 | 1 | 0.464 | 0.778 | 0.636 |
-| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 |
-| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 |
-| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 |
-| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 |
+| repo_id | pass_rate | full_green | usd_spent | iterations | diff_line_jaccard | symbol_precision | symbol_recall | security |
+|---|---|---|---|---|---|---|---|---|
+| Aiven-Open__rohmu | 0.000 | False | 0.0000 | 1 | 0.009 | 0.241 | 0.778 | clean |
+| SupImDos__pydantic-argparse | 0.000 | False | 0.0000 | 1 | 0.000 | 0.250 | 0.037 | clean |
+| cmudig__draco2 | 0.878 | False | 0.0015 | 2 | 0.219 | 0.667 | 0.727 | clean |
+| eyurtsev__kor | 0.506 | False | 0.0000 | 1 | 0.197 | 0.533 | 0.727 | clean |
+| iscc__iscc-core | 1.000 | True | 0.0000 | 1 | 0.059 | 0.250 | 1.000 | clean |
+| madkote__fastapi-plugins | 0.370 | False | 0.0000 | 1 | 0.549 | 0.732 | 0.769 | clean |
+| okfn__opendataeditor | 0.022 | False | 0.0000 | 1 | 0.233 | 1.000 | 0.364 | clean |

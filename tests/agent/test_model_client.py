@@ -384,3 +384,69 @@ def test_groq_does_not_retry_a_genuine_413() -> None:
         client.complete(system="sys", prompt="prompt")
 
     assert post.call_count == 1
+
+
+# --- TPM pacing (docs/decisions.md D101) ----------------------------------------------
+
+
+def test_pacer_allows_requests_that_fit_the_window_without_waiting() -> None:
+    from pmigrate.agent.model_client import TpmPacer
+
+    slept: list[float] = []
+    pacer = TpmPacer(limit_tokens_per_min=8000)
+    for _ in range(4):
+        pacer.reserve(1000, sleep=slept.append, monotonic=lambda: 1000.0)
+    assert slept == []
+
+
+def test_pacer_waits_when_the_next_request_would_breach_the_limit() -> None:
+    """The whole point: a request that would exceed the ceiling waits instead of being
+    sent and rejected. Six attempts at the retrieval ablation reported '0 repairs applied'
+    for arms that were never given a chance to make one (D87).
+
+    Uses a virtual clock that the fake sleep advances -- with a real clock and a fake sleep
+    the loop spins for a real minute (D101).
+    """
+    from pmigrate.agent.model_client import TpmPacer
+
+    t = [1000.0]
+    slept: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        t[0] += seconds
+
+    pacer = TpmPacer(limit_tokens_per_min=8000)
+    pacer.reserve(7000, sleep=fake_sleep, monotonic=lambda: t[0])
+    waited = pacer.reserve(6000, sleep=fake_sleep, monotonic=lambda: t[0])
+
+    assert slept, "second request should have waited"
+    assert waited >= 60.0 - 1e-6, "must wait for the first reservation to age out"
+
+
+def test_pacer_never_blocks_forever_on_an_oversized_single_request() -> None:
+    """A request larger than the entire minute's budget can never fit. Blocking forever
+    would be worse than letting the provider reject it -- the prompt cap (D75) is what
+    should have prevented that request existing."""
+    from pmigrate.agent.model_client import TpmPacer
+
+    slept: list[float] = []
+    pacer = TpmPacer(limit_tokens_per_min=8000)
+    pacer.reserve(50_000, sleep=slept.append, monotonic=lambda: 1000.0)
+    assert slept == []
+
+
+def test_estimate_counts_the_prompt_not_the_completion_cap() -> None:
+    """Measured live (D86): Groq's overage message reported `Requested 8162` for a request
+    whose completion cap was 32768, so the figure it checks is the prompt. Budgeting for
+    the cap would throttle to roughly one call every four minutes for nothing."""
+    from pmigrate.agent.model_client import _estimate_request_tokens
+
+    body = {"messages": [{"content": "x" * 4000}], "max_completion_tokens": 32768}
+    assert 900 <= _estimate_request_tokens(body) <= 1100
+
+
+def test_pacing_is_disabled_when_tpm_limit_is_none() -> None:
+    """Every unit test runs with pacing off -- a real sleep in a test suite is its own bug."""
+    client = GroqModelClient(api_key="k", tpm_limit=None)
+    assert client._get_pacer() is None

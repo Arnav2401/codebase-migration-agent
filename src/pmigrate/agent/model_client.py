@@ -18,7 +18,9 @@ behind it.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -203,6 +205,90 @@ _GROQ_PRICE_PER_TOKEN_USD: dict[str, dict[str, float]] = {
 }
 
 
+@dataclass
+class TpmPacer:
+    """Keeps a client under a tokens-per-minute ceiling by WAITING before a request that
+    would breach it (docs/decisions.md D101).
+
+    D86 established that Groq reports a TPM overage as `413 Payload Too Large` with
+    `rate_limit_exceeded` in the body, and D99's retry turns that into a delay rather than a
+    lost repair. But retry-after-rejection is a poor way to spend a scarce budget: the
+    rejected request still consumed a round trip, the backoff is fixed rather than derived
+    from how much budget is actually left, and a run that is merely SLOW ends up looking
+    like a run that FAILED -- which is how six separate attempts at the retrieval ablation
+    (D87) came back reporting "0 repairs applied" for arms that were never given a chance to
+    make one.
+
+    Pacing instead means a request is sent only when the window can afford it. Runs get
+    slower; they stop being wrong.
+
+    Sliding window rather than fixed buckets: a fixed 60s bucket lets a burst at 0:59 and
+    another at 1:01 breach the real limit while satisfying the counter.
+    """
+
+    limit_tokens_per_min: int
+    _window: list[tuple[float, int]] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - 60.0
+        self._window = [(ts, n) for ts, n in self._window if ts > cutoff]
+
+    def reserve(
+        self,
+        estimated_tokens: int,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] | None = None,
+    ) -> float:
+        """Blocks until `estimated_tokens` fit in the trailing 60s, then records them.
+
+        Records the ESTIMATE up front rather than the true usage afterwards: the limit has
+        to be respected before the request goes out, and a call still in flight has already
+        committed its prompt tokens.
+
+        The estimate is never corrected against the provider's real count. That is
+        deliberate: chars/4 runs slightly high for source code, so the pacer can only ever
+        UNDER-use the budget, never over-use it. Erring the other way would buy marginally
+        faster runs at the cost of the 413s this exists to prevent.
+        """
+        # `monotonic` is injectable alongside `sleep` because the two must move together.
+        # A fake sleep with a real clock makes this loop SPIN until wall-clock catches up --
+        # it does terminate, sixty seconds later, which is how the first version of this
+        # test turned a unit suite into a one-minute suite while still passing.
+        clock = monotonic or time.monotonic
+        waited = 0.0
+        while True:
+            with self._lock:
+                now = clock()
+                self._prune(now)
+                used = sum(n for _, n in self._window)
+                if used + estimated_tokens <= self.limit_tokens_per_min or not self._window:
+                    # `not self._window`: a single request larger than the whole minute's
+                    # budget can never fit, and blocking forever would be worse than letting
+                    # the provider reject it -- the caller's own cap (D75) is what should
+                    # have prevented that request existing.
+                    self._window.append((now, estimated_tokens))
+                    return waited
+                oldest = self._window[0][0]
+                delay = max(0.05, 60.0 - (now - oldest))
+            log.info("model_client.tpm_wait", seconds=round(delay, 1), used=used)
+            sleep(delay)
+            waited += delay
+
+
+def _estimate_request_tokens(body: dict[str, Any]) -> int:
+    """Prompt tokens only, at ~4 chars/token.
+
+    NOT including `max_completion_tokens`: measured live (D86), Groq's own overage message
+    reported `Requested 8162` for a request whose completion cap was 32768, so the figure
+    it checks is the prompt. Budgeting for the cap would throttle to roughly one call every
+    four minutes for no reason. Actual completion usage is folded back in by `settle`.
+    """
+    text = "".join(str(m.get("content", "")) for m in body.get("messages", []))
+    return len(text) // 4
+
+
 def _is_retryable_rate_limit(resp: requests.Response) -> bool:
     """True for a plain 429, and ALSO for Groq's 413 (docs/decisions.md D86).
 
@@ -242,6 +328,12 @@ class GroqModelClient:
     # mirrors GeminiModelClient's own reasoning (D26): repair asks for the WHOLE corrected
     # file, not a diff, so this needs to scale with file size, not just "thinking" budget.
     max_output_tokens: int = 32768
+    # docs/decisions.md D101. Measured against the live API (D86): this account's tier is
+    # 8000 tokens/min, and a repair prompt runs 5-6k, so roughly one call per minute is
+    # sustainable. `None` disables pacing entirely, which is what every unit test uses --
+    # a real sleep in a test suite is its own bug.
+    tpm_limit: int | None = 8000
+    _pacer: TpmPacer | None = None
 
     # Found live (docs/decisions.md D49): unlike Gemini's persistent daily-quota 429
     # (D48 — retrying just wastes time hitting the same wall), Groq's 429 recovers within
@@ -263,6 +355,16 @@ class GroqModelClient:
     # silently for however long Groq's header actually says.
     _MAX_RETRY_DELAY_S: float = 30.0
 
+    def _get_pacer(self) -> TpmPacer | None:
+        """Lazily built and cached on the instance, so every call from one client shares a
+        window. `run_corpus` builds ONE client and hands it to every repo (D67's pattern for
+        the embedder), so this paces the whole run, not each repo independently."""
+        if self.tpm_limit is None:
+            return None
+        if self._pacer is None:
+            object.__setattr__(self, "_pacer", TpmPacer(limit_tokens_per_min=self.tpm_limit))
+        return self._pacer
+
     @classmethod
     def from_env(cls, model: str = "openai/gpt-oss-120b") -> GroqModelClient:
         key = os.environ.get("GROQ_API_KEY")
@@ -281,6 +383,11 @@ class GroqModelClient:
             "temperature": 0,
             "max_completion_tokens": self.max_output_tokens,
         }
+        estimated = _estimate_request_tokens(body)
+        pacer = self._get_pacer()
+        if pacer is not None:
+            pacer.reserve(estimated)
+
         for attempt in range(self._MAX_RETRIES + 1):
             resp = requests.post(
                 f"{GROQ_API_BASE}/chat/completions",

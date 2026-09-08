@@ -4789,6 +4789,67 @@ busy."
 
 ---
 
+## D101/D102 — TPM pacing works; and the ablation was measuring run order, not retrieval
+
+**D101, the pacer.** D86 established that Groq reports a tokens-per-minute overage as
+`413 Payload Too Large`, and D99 made that retryable. But retry-after-rejection is a poor
+way to spend a scarce budget: the rejected request still costs a round trip, the backoff is
+fixed rather than derived from remaining budget, and a run that is merely SLOW ends up
+reported as a run that FAILED. `TpmPacer` keeps a sliding 60s window and waits before
+sending a request the window cannot afford. Sliding, not fixed buckets — a burst at 0:59
+and another at 1:01 breaches the real limit while satisfying a fixed counter.
+
+It worked, immediately and measurably: **413s went from 5-6 per arm to zero**, and the
+`graph` arm went from 1 repair applied to **7**.
+
+Two details worth keeping. The estimate counts the PROMPT only, not
+`max_completion_tokens` — measured live, Groq's own message reported `Requested 8162` for a
+request whose completion cap was 32768, so budgeting for the cap would throttle to one call
+every four minutes for nothing. And the estimate is never reconciled against the provider's
+real count: chars/4 runs slightly high for source code, so the pacer can only under-use the
+budget, never over-use it.
+
+**D102, the finding that matters more.** With pacing on, the three retrieval arms ran back
+to back and produced this:
+
+| arm | run order | repairs applied | 429s | mean |
+|---|---|---|---|---|
+| `graph` | **1st** | **7** | 4 | 0.4177 |
+| `embedding` | 2nd | 1 | 6 | 0.3965 |
+| `wholefile` | 3rd | **0** | 6 | 0.3965 |
+
+Repairs landed in strict decreasing order of run *position*, and every single failure was a
+429 against the DAILY budget, which the per-minute pacer does nothing about. The apparent
+result — graph beats embedding beats wholefile, exactly the "resume claim" this project
+wanted — **is a ranking of which arm ran first.** Reporting it as a retrieval finding would
+have been the most flattering wrong number this project could produce, and it would have
+looked like a success.
+
+This also explains the six earlier failed attempts (D87): each arm was launched as a
+separate command, so the confound was never visible in any single run's output.
+
+**Fixed by interleaving.** `eval/interleave.py` groups the plan by REPO — every arm runs on
+a repo before the next repo starts — so the shared budget runs out *between repos* rather
+than *between arms*, and the arms compared on any given repo saw comparable conditions. An
+ablation is a within-repo comparison and the execution order should match. Arm order rotates
+per repo so even the residual advantage of going first is not always handed to the same arm.
+`budget_exhausted_repos` identifies partially-scored repos for exclusion, because including
+an arm that ran while excluding one that did not reintroduces the same confound at analysis
+time.
+
+**Not yet re-run: the daily budget is spent.** The interleaved plan is implemented and
+tested but the measurement it enables has not happened. Recording that rather than implying
+the ablation is now answered.
+
+**Interview:** "Pacing fixed the per-minute limit and the first arm went from one repair to
+seven. Then the three arms came out ranked exactly the way my project's thesis wanted —
+graph best, wholefile worst — and that was the problem: repairs landed in decreasing order
+of which arm I ran first, and every failure was the daily budget, not the strategy. I'd have
+been reporting run order as a retrieval result. The fix is to interleave by repo so the
+budget dies between repos instead of between arms."
+
+---
+
 ## Template
 
 ```
