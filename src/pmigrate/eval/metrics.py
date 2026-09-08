@@ -155,6 +155,12 @@ class RepoResult:
     symbol_precision: float | None = None
     symbol_recall: float | None = None
     trace_path: str | None = None  # Phase 6 concept; stays None until that phase unlocks
+    # docs/decisions.md D99 (Phase 8's security gate). `None` = the gate did not run, which
+    # must stay distinct from 0 = it ran and found nothing introduced -- the same
+    # not-measured-is-not-zero rule as the diff-similarity fields above (D57/D71), and it
+    # matters more here: a run that never scanned must never read as a clean scan.
+    security_introduced: int | None = None
+    security_worst_severity: str | None = None
 
 
 def score_run(

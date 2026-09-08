@@ -18,6 +18,7 @@ means replacing that function alone.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -25,6 +26,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+
+# Bandit's `code` field is the offending line plus context, each line PREFIXED WITH ITS
+# LINE NUMBER ("222         assert not self.total"). Keying on it raw makes the key
+# line-dependent after all, which is the bug this keying was supposed to avoid: found live
+# (docs/decisions.md D99) when the gate reported 9 "introduced" B101 findings on
+# `Aiven-Open__rohmu` that were pre-existing asserts, renumbered because T1 had edited the
+# file above them. Stripping the prefixes makes the key depend on the CODE only.
+_LINE_NUMBER_PREFIX = re.compile(r"^\s*\d+\s?", re.MULTILINE)
+
+
+def _normalize_code(code: str) -> str:
+    """The offending code with bandit's line-number prefixes and indentation removed."""
+    without_numbers = _LINE_NUMBER_PREFIX.sub("", code)
+    return "\n".join(line.strip() for line in without_numbers.splitlines() if line.strip())
+
+
 SCAN_TIMEOUT_S = 300
 
 
@@ -44,7 +61,7 @@ class Finding:
 
     @property
     def key(self) -> tuple[str, str, str]:
-        return (self.test_id, self.path, self.code.strip())
+        return (self.test_id, self.path, _normalize_code(self.code))
 
 
 @dataclass(frozen=True)

@@ -97,6 +97,13 @@ def _result_to_dict(result: RepoResult) -> dict[str, Any]:
         "symbol_precision": result.symbol_precision,
         "symbol_recall": result.symbol_recall,
         "trace_path": result.trace_path,
+        # docs/decisions.md D99. Every optional field must round-trip, or a RESUMED cell
+        # silently reports "not measured" for something that was measured -- and for the
+        # security gate that reads as "never scanned", which is the one thing the gate
+        # must never claim falsely. Caught by an existing resumability test that compares
+        # a fresh result against its stored copy.
+        "security_introduced": result.security_introduced,
+        "security_worst_severity": result.security_worst_severity,
     }
 
 
@@ -118,6 +125,10 @@ def _result_from_dict(data: dict[str, Any]) -> RepoResult:
         symbol_precision=data["symbol_precision"],
         symbol_recall=data["symbol_recall"],
         trace_path=data["trace_path"],
+        # `.get`, not `[...]`: rows written before these fields existed must still load
+        # rather than crashing the whole resume path on a KeyError.
+        security_introduced=data.get("security_introduced"),
+        security_worst_severity=data.get("security_worst_severity"),
     )
 
 

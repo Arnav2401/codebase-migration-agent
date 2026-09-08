@@ -4704,6 +4704,53 @@ bad."
 
 ---
 
+## D99 — The security gate in the eval path, and the false positive it produced on its first real run
+
+**Wired** into `run_repo` (scan the untouched checkout, scan the migrated overlay, compare),
+onto `RepoResult` as `security_introduced`/`security_worst_severity`, into the trace as a
+`tool_call` event, and into the per-repo appendix as a `security` column —
+**deliberately not the headline table**, per phase-8-optional.md ("an additional gate in the
+eval table, not as a headline"). It answers "did this migration make the repo less safe",
+which is a different question from how well it migrated and must not dilute that number.
+
+**Its first real run was wrong, and finding out took running it.** The gate reported
+`Aiven-Open__rohmu` as **+9 low** — nine introduced B101 (`assert_used`) findings. All nine
+were pre-existing asserts in `rohmu/delta/common.py` that predated the migration. Bandit's
+`code` field is the offending line plus context with **each line prefixed by its line
+number**, so keying on `(test_id, path, code)` was line-dependent after all: T1 edited the
+file above them, every finding renumbered, and every key changed.
+
+That is precisely the false positive D98's docstring claimed the keying avoided. The claim
+was written, the test that "proved" it used hand-built findings with clean code strings, and
+the real scanner's output format defeated it. Fixed by stripping line-number prefixes and
+indentation before keying; `rohmu` now reports 358 findings before and 358 after, gate
+passes. The regression test now uses bandit's ACTUAL string shape rather than an idealised
+one.
+
+**Three smaller things this shook out:**
+
+- **The store did not round-trip the new fields**, so a RESUMED cell would have loaded them
+  as `None` — reading as "never scanned" for a run that had in fact scanned clean. Caught by
+  an existing resumability test that compares a fresh result against its stored copy, which
+  is exactly the test that should catch it. Deserialisation uses `.get` so rows written
+  before these fields existed still load.
+- **`None` and `0` must render differently** in the results table: `—` for a gate that did
+  not run, `clean` for one that ran and found nothing. Same not-measured-is-not-zero rule as
+  D57/D71, and it matters more here, because an unscanned run displaying as clean is a false
+  security claim in a published table — the same class of error as D97.
+- **`run_security_gate` is exposed on `run_corpus`** so unit tests can opt out. A scanner
+  subprocess in a fake-sandbox test is slow and irrelevant to what those tests assert.
+
+**Interview:** "I wired the security gate into the eval path and its first real run flagged
+nine introduced findings on one repo. They were all pre-existing asserts — bandit puts line
+numbers inside the code snippet it reports, so my supposedly line-independent key was
+line-dependent, and editing the file above them renumbered every one. I'd written a comment
+claiming the design avoided exactly that, and a unit test that agreed with me because it fed
+in idealised strings. The fix was small; the lesson was that a test using invented fixture
+data can confirm a property the real tool's output format breaks."
+
+---
+
 ## Template
 
 ```

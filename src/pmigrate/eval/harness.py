@@ -75,6 +75,7 @@ from pmigrate.graph.relevance import compute_work_list
 from pmigrate.graph.repo_files import read_py_files
 from pmigrate.graph.resolver import resolve_repo
 from pmigrate.sandbox.protocol import Sandbox
+from pmigrate.security.regression import gate as security_gate
 from pmigrate.trace.writer import DEFAULT_TRACE_ROOT, TraceWriter
 from pmigrate.triage.collect import collect_raw_failures
 from pmigrate.triage.grouping import group_raw_failures
@@ -328,6 +329,7 @@ def run_repo(
     failures_out: Path | None = None,
     embedder: Embedder | None = None,
     trace_root: Path | None = None,
+    run_security_gate: bool = True,
 ) -> RepoResult:
     """Runs the full migration loop against one already-checked-out repo and scores the
     result. `image` is built by the caller (`sandbox.build(repo, "v2")` — the SAME image
@@ -420,6 +422,38 @@ def run_repo(
         )
         result = replace(result, trace_path=str(tracer.path))
 
+    # Phase 8 (docs/decisions.md D99): an ADDITIONAL gate, not a headline. Reports only
+    # findings the migration introduced -- the repo's pre-existing ones are not its fault,
+    # the same principle I4 applies to tests. Failure to scan is recorded as a scan failure
+    # rather than silently as "clean".
+    if run_security_gate:
+        report = security_gate(source_root, overlay_root)
+        result = replace(
+            result,
+            security_introduced=None if report.scan_failed else len(report.introduced),
+            security_worst_severity=report.worst_introduced,
+        )
+        if tracer is not None:
+            tracer.emit(
+                "tool_call",
+                {
+                    "name": "security_gate",
+                    "introduced": len(report.introduced),
+                    "worst": report.worst_introduced,
+                    "pre_count": report.pre_count,
+                    "post_count": report.post_count,
+                    "scan_failed": report.scan_failed,
+                },
+            )
+        if report.worsened:
+            log.warning(
+                "harness.security_gate_failed",
+                repo_id=repo.repo_id,
+                introduced=len(report.introduced),
+                worst=report.worst_introduced,
+                scan_failed=report.scan_failed,
+            )
+
     similarity = compute_diff_similarity(repo, source_root, overlay_root, final_state)
     if similarity is not None:
         result = replace(
@@ -472,6 +506,7 @@ def _run_one_repo(
     embedder: Embedder | None,
     clone_cache_root: Path,
     trace_root: Path | None,
+    run_security_gate: bool,
 ) -> RepoResult | None:
     """One repo's worth of `run_corpus`'s loop body — factored out so both the sequential
     path (`max_workers=1`, identical control flow to before docs/decisions.md D66) and the
@@ -536,6 +571,7 @@ def _run_one_repo(
             failures_out=failures_out,
             embedder=embedder,
             trace_root=trace_root,
+            run_security_gate=run_security_gate,
         )
     except Exception as e:
         log.warning("harness.repo_failed", repo_id=repo.repo_id, error=str(e))
@@ -574,6 +610,7 @@ def run_corpus(
     total_usd_cap: float | None = None,
     clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
     trace_root: Path | None = DEFAULT_TRACE_ROOT,
+    run_security_gate: bool = True,
 ) -> list[RepoResult]:
     """One repo's failure (clone, build, or a crash mid-loop) is logged and skipped, not
     fatal to the rest — matching capture_baselines.py's own additive-not-destructive
@@ -635,6 +672,7 @@ def run_corpus(
                 embedder=embedder,
                 clone_cache_root=clone_cache_root,
                 trace_root=trace_root,
+                run_security_gate=run_security_gate,
             )
             if result is not None:
                 results.append(result)
@@ -659,6 +697,7 @@ def run_corpus(
                 embedder=embedder,
                 clone_cache_root=clone_cache_root,
                 trace_root=trace_root,
+                run_security_gate=run_security_gate,
             )
             for repo in specs
         ]

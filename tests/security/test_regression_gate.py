@@ -73,3 +73,39 @@ def test_run_scan_returns_no_error_on_a_clean_tree(tmp_path: Path) -> None:
     findings, error = run_scan(tmp_path)
     assert error is None
     assert findings == []
+
+
+def test_bandit_line_number_prefixes_do_not_make_a_finding_look_new() -> None:
+    """The false positive that made this gate useless on its first real run (D99).
+
+    Bandit's `code` field is the offending line plus context, each prefixed with its line
+    NUMBER. Keying on it raw made the key line-dependent, so editing a file above an
+    untouched finding renumbered it and reported it as introduced. Real case:
+    `Aiven-Open__rohmu` reported 9 "introduced" B101 asserts that predated the migration.
+    """
+    pre = [
+        _f(
+            test_id="B101",
+            severity="LOW",
+            path="m.py",
+            code="222         assert not self.total\n223     ",
+        )
+    ]
+    post = [
+        _f(
+            test_id="B101",
+            severity="LOW",
+            path="m.py",
+            code="231         assert not self.total\n232     ",
+        )
+    ]
+
+    assert compare(pre, post).introduced == []
+    assert not compare(pre, post).worsened
+
+
+def test_a_genuinely_different_line_at_the_same_location_is_still_new() -> None:
+    """Normalisation must not go so far that it stops detecting anything."""
+    pre = [_f(test_id="B101", path="m.py", code="222         assert not self.total")]
+    post = [_f(test_id="B101", path="m.py", code="222         assert self.unsafe_thing()")]
+    assert len(compare(pre, post).introduced) == 1

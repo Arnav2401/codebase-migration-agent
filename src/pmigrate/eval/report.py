@@ -40,6 +40,11 @@ from pmigrate.eval.metrics import RepoResult
 from pmigrate.eval.stats import bootstrap_mean_ci
 
 _DIFF_SIMILARITY_HEADER = "diff_line_jaccard | symbol_precision | symbol_recall"
+# Phase 8's gate rides in the per-repo appendix, deliberately not the headline table
+# (phase-8-optional.md: "Report it as an additional gate in the eval table, not as a
+# headline") -- it answers "did this migration make the repo less safe", which is a
+# different question from how well it migrated and must not dilute that number.
+_SECURITY_HEADER = "security"
 
 
 def _mean(values: Sequence[float]) -> float:
@@ -57,6 +62,26 @@ def _group_by_repo(results: Sequence[RepoResult]) -> dict[str, list[RepoResult]]
     for r in results:
         groups.setdefault(r.repo_id, []).append(r)
     return groups
+
+
+def _security_cell(seed_results: Sequence[RepoResult]) -> str:
+    """`—` when the gate did not run, `clean` when it ran and found nothing introduced.
+    Those must not render the same: a run that never scanned is not a clean scan (D99)."""
+    measured = [r for r in seed_results if r.security_introduced is not None]
+    if not measured:
+        return "—"
+    total = sum(r.security_introduced or 0 for r in measured)
+    if total == 0:
+        return "clean"
+    worst = next(
+        (
+            sev
+            for sev in ("HIGH", "MEDIUM", "LOW")
+            if any(r.security_worst_severity == sev for r in measured)
+        ),
+        "?",
+    )
+    return f"**+{total} {worst.lower()}**"
 
 
 def _diff_similarity_cells(seed_results: Sequence[RepoResult]) -> str:
@@ -80,11 +105,12 @@ def _repo_row(repo_id: str, seed_results: Sequence[RepoResult]) -> str:
     Only renders the mean/range/count-across-seeds form once a repo genuinely has more
     than one seed's `RepoResult` to summarize."""
     diff_cells = _diff_similarity_cells(seed_results)
+    sec_cell = _security_cell(seed_results)
     if len(seed_results) == 1:
         r = seed_results[0]
         return (
             f"| {repo_id} | {r.pass_rate:.3f} | {r.full_green} | "
-            f"{r.usd_spent:.4f} | {r.iterations} | {diff_cells} |"
+            f"{r.usd_spent:.4f} | {r.iterations} | {diff_cells} | {sec_cell} |"
         )
 
     pass_rates = [r.pass_rate for r in seed_results]
@@ -97,7 +123,7 @@ def _repo_row(repo_id: str, seed_results: Sequence[RepoResult]) -> str:
     )
     return (
         f"| {repo_id} | {pass_rate_cell} | {full_green_count}/{k} | "
-        f"{total_usd:.4f} | {mean_iterations:.1f} | {diff_cells} |"
+        f"{total_usd:.4f} | {mean_iterations:.1f} | {diff_cells} | {sec_cell} |"
     )
 
 
@@ -177,9 +203,10 @@ def write_results_table(results: list[RepoResult], out_path: Path, *, config_nam
     )
     lines.append("")
     lines.append(
-        f"| repo_id | pass_rate | full_green | usd_spent | iterations | {_DIFF_SIMILARITY_HEADER} |"
+        f"| repo_id | pass_rate | full_green | usd_spent | iterations | "
+        f"{_DIFF_SIMILARITY_HEADER} | {_SECURITY_HEADER} |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for repo_id in sorted(groups):
         lines.append(_repo_row(repo_id, groups[repo_id]))
 
@@ -275,7 +302,7 @@ def write_main_report(results_by_config: dict[str, list[RepoResult]], out_path: 
         "line_jaccard (mean [95% CI], n measured) | symbol_precision (mean [95% CI], n measured) | "
         "symbol_recall (mean [95% CI], n measured) |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
 
     for name in sorted(results_by_config):
         results = results_by_config[name]
@@ -317,8 +344,8 @@ def write_main_report(results_by_config: dict[str, list[RepoResult]], out_path: 
             continue
         groups = _group_by_repo(results)
         header = "| repo_id | pass_rate | full_green | usd_spent | iterations | "
-        lines.append(f"{header}{_DIFF_SIMILARITY_HEADER} |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append(f"{header}{_DIFF_SIMILARITY_HEADER} | {_SECURITY_HEADER} |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for repo_id in sorted(groups):
             lines.append(_repo_row(repo_id, groups[repo_id]))
 

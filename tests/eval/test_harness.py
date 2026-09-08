@@ -477,6 +477,7 @@ def test_run_corpus_with_resume_skips_a_cell_already_in_the_store(tmp_path: Path
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
 
     assert results == [existing]
@@ -507,6 +508,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
     assert len(first) == 1
     assert store.has_result(repo.repo_id, config_hash(config), "deadbeef") is True
@@ -524,6 +526,7 @@ def test_run_corpus_saves_a_fresh_result_and_a_second_call_skips_it(tmp_path: Pa
         resume=resume,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
     assert second == first
 
@@ -585,6 +588,7 @@ def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
         max_workers=n_repos,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
     elapsed = time.time() - start
 
@@ -635,6 +639,7 @@ def test_run_corpus_shares_one_embedder_instance_across_concurrent_repos(
         max_workers=n_repos,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
 
     assert len(results) == n_repos
@@ -652,6 +657,7 @@ def test_run_corpus_rejects_a_sub_one_max_workers(tmp_path: Path) -> None:
             max_workers=0,
             clone_cache_root=tmp_path / "clone_cache",
             trace_root=tmp_path / "traces",
+            run_security_gate=False,
         )
         raise AssertionError("expected ValueError")
     except ValueError as e:
@@ -684,6 +690,7 @@ def test_run_corpus_total_usd_cap_stops_starting_new_repos(tmp_path: Path) -> No
         total_usd_cap=3.0,
         clone_cache_root=tmp_path / "clone_cache",
         trace_root=tmp_path / "traces",
+        run_security_gate=False,
     )
 
     # repo0 runs (spend now >= $2, still < $3 cap when repo1 is CHECKED) -- repo1 runs

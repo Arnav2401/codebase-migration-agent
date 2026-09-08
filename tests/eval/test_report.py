@@ -20,6 +20,8 @@ def _result(
     symbol_precision: float | None = None,
     symbol_recall: float | None = None,
     seed: int = 0,
+    security_introduced: int | None = None,
+    security_worst_severity: str | None = None,
 ) -> RepoResult:
     return RepoResult(
         repo_id=repo_id,
@@ -35,6 +37,8 @@ def _result(
         diff_line_jaccard=diff_line_jaccard,
         symbol_precision=symbol_precision,
         symbol_recall=symbol_recall,
+        security_introduced=security_introduced,
+        security_worst_severity=security_worst_severity,
     )
 
 
@@ -278,3 +282,34 @@ def test_write_main_report_model_caveat_ignores_arms_with_no_scored_repos(
     )
 
     assert "do not all run the same model" not in out_path.read_text()
+
+
+# --- Phase 8 security gate column (docs/decisions.md D99) ------------------------------
+
+
+def test_security_column_distinguishes_not_run_from_clean(tmp_path: Path) -> None:
+    """A run that never scanned must not render the same as one that scanned and found
+    nothing -- `—` versus `clean`. The whole point of the gate is lost if an unscanned run
+    reads as safe."""
+    out = tmp_path / "graph.md"
+    write_results_table(
+        [
+            _result("acme__unscanned", 1.0, True),
+            _result("acme__clean", 1.0, True, security_introduced=0),
+        ],
+        out,
+        config_name="graph",
+    )
+    content = out.read_text()
+    assert "| acme__unscanned | 1.000 | True | 0.1000 | 2 | — | — | — | — |" in content
+    assert "| acme__clean | 1.000 | True | 0.1000 | 2 | — | — | — | clean |" in content
+
+
+def test_security_column_flags_introduced_findings_with_severity(tmp_path: Path) -> None:
+    out = tmp_path / "graph.md"
+    write_results_table(
+        [_result("acme__bad", 0.5, False, security_introduced=2, security_worst_severity="HIGH")],
+        out,
+        config_name="graph",
+    )
+    assert "**+2 high**" in out.read_text()
