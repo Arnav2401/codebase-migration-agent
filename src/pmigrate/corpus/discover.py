@@ -97,6 +97,13 @@ CODE_SEARCH_QUERIES = [
     "allow_population_by_field_name language:python",
     "TypeAdapter language:python",
     "model_config = ConfigDict language:python",
+    # D88: more v1-only surface, same reasoning as orm_mode above -- each was removed or
+    # renamed in v2, so its presence proves the codebase touched v1.
+    "underscore_attrs_are_private language:python",
+    "json_encoders language:python",
+    "from pydantic import parse_obj_as language:python",
+    "copy_on_model_validation language:python",
+    "validate_arguments language:python",
 ]
 
 

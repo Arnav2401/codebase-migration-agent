@@ -97,18 +97,53 @@ MAX_TEST_SPLIT_RUNS = 3
 
 
 def _test_split_runs_used(log_path: Path) -> int:
+    """Total `--split test` invocations ever. Retained for reporting; the BUDGET is now
+    per-repo (`_runs_per_repo`), see docs/decisions.md D88."""
     if not log_path.exists():
         return 0
     return sum(1 for line in log_path.read_text().splitlines() if line.strip())
 
 
-def _record_test_split_run(log_path: Path, *, config: str, seeds: list[int]) -> None:
-    """Appends one line per `--split test` invocation (docs/decisions.md D84). The budget
-    is an invariant (I5/D7: at most 3 ever), and an invariant enforced by memory is not
-    enforced -- this project already spent run 1 partly to recover from a filename bug
-    (D83) precisely because nothing was counting."""
+def _runs_per_repo(log_path: Path) -> dict[str, int]:
+    """How many held-out runs each repo has been measured in (docs/decisions.md D88).
+
+    I5/D7's budget was originally "at most 3 test-split runs total". Its PURPOSE is to stop
+    anyone iterating against the held-out set until the number is memorised. That purpose
+    attaches to a REPO, not to a global counter: a repo discovered and baselined after all
+    tuning, never yet measured, carries none of the contamination the cap exists to prevent,
+    and refusing to measure it makes the corpus permanently unable to answer a question it
+    was just extended to answer.
+
+    So the budget is per-repo: at most `MAX_TEST_SPLIT_RUNS` runs that INCLUDE a given repo.
+    That is strictly no weaker against overfitting -- you still cannot iterate against any
+    individual repo -- while letting the held-out set grow. It is deliberately not a reset:
+    `lnbits__lnurl` and `isaacharrisholt__quiffen` remain spent at 3/3 forever.
+
+    Entries written before D88 carried no `repos` key. Rather than have this function
+    silently treat them as measuring nothing, they were backfilled in the log itself with
+    the two repos that were the entire test split at the time -- so the count reflects what
+    actually happened, and this function stays a plain read of the record.
+    """
+    counts: dict[str, int] = {}
+    if not log_path.exists():
+        return counts
+    for line in log_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        for repo_id in json.loads(line).get("repos", []):
+            counts[repo_id] = counts.get(repo_id, 0) + 1
+    return counts
+
+
+def _record_test_split_run(
+    log_path: Path, *, config: str, seeds: list[int], repos: list[str]
+) -> None:
+    """Appends one line per `--split test` invocation (docs/decisions.md D84/D88). The
+    budget is an invariant (I5/D7), and an invariant enforced by memory is not enforced --
+    this project already spent run 1 partly to recover from a filename bug (D83) precisely
+    because nothing was counting, and spent run 3 on an exhausted quota window (D87)."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"at": time.time(), "config": config, "seeds": seeds}
+    entry = {"at": time.time(), "config": config, "seeds": seeds, "repos": sorted(repos)}
     with log_path.open("a") as fh:
         fh.write(json.dumps(entry) + "\n")
 
@@ -184,28 +219,8 @@ def main(
     # held-out split can never be touched by a stray `--split test` or a loop over splits,
     # and a hard budget, because "at most 3 times total" is worthless if nobody counts.
     # Checked before any Docker/model work so a refusal costs nothing.
-    if split == "test":
-        used = _test_split_runs_used(test_split_run_log)
-        if not i_know_what_im_doing:
-            typer.echo(
-                f"REFUSING --split test without --i-know-what-im-doing (PLAN.md I5). "
-                f"The held-out split may be run at most {MAX_TEST_SPLIT_RUNS} times ever; "
-                f"{used} used so far. Every prompt/model change belongs on --split dev.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        if used >= MAX_TEST_SPLIT_RUNS:
-            typer.echo(
-                f"REFUSING --split test: the I5 budget is exhausted "
-                f"({used}/{MAX_TEST_SPLIT_RUNS} runs used, logged in {test_split_run_log}). "
-                "Spending more would make the held-out number meaningless -- that is the "
-                "whole point of the invariant, so this refuses rather than warns.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
     try:
-        seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
+        seed_list = [int(x.strip()) for x in seeds.split(",") if x.strip()]
     except ValueError as exc:
         raise typer.BadParameter(
             f"seeds must be a comma-separated list of ints, got {seeds!r}"
@@ -214,6 +229,15 @@ def main(
         raise typer.BadParameter("seeds must name at least one seed")
     if len(set(seed_list)) != len(seed_list):
         raise typer.BadParameter(f"seeds must not repeat, got {seeds!r}")
+
+    if split == "test" and not i_know_what_im_doing:
+        typer.echo(
+            "REFUSING --split test without --i-know-what-im-doing (PLAN.md I5). "
+            f"Each held-out repo may be measured at most {MAX_TEST_SPLIT_RUNS} times; "
+            "every prompt/model change belongs on --split dev.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     config_path = configs_dir / f"{config}.json"
     if not config_path.exists():
@@ -234,10 +258,32 @@ def main(
     c_sha = corpus_sha(manifest_path)
 
     if split == "test":
-        _record_test_split_run(test_split_run_log, config=config, seeds=seed_list)
+        # D88: budget is per-repo. Exhausted repos are SKIPPED, not a reason to refuse the
+        # whole run -- otherwise one spent repo would permanently block every fresh one
+        # added alongside it, which is the opposite of what I5 is protecting.
+        used_by_repo = _runs_per_repo(test_split_run_log)
+        in_split = [r.repo_id for r in specs if r.split == "test"]
+        eligible = [r for r in in_split if used_by_repo.get(r, 0) < MAX_TEST_SPLIT_RUNS]
+        exhausted = [r for r in in_split if r not in eligible]
+        if exhausted:
+            typer.echo(
+                f"skipping {len(exhausted)} held-out repo(s) at their {MAX_TEST_SPLIT_RUNS}-run "
+                f"I5 budget: {', '.join(sorted(exhausted))}"
+            )
+        if not eligible:
+            typer.echo(
+                "REFUSING --split test: every held-out repo has spent its "
+                f"{MAX_TEST_SPLIT_RUNS}-run I5 budget. Add genuinely new held-out repos "
+                "(discovered and baselined AFTER the changes being measured) rather than "
+                "re-measuring these -- see docs/decisions.md D88.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        specs = [r for r in specs if r.split != "test" or r.repo_id in eligible]
+        _record_test_split_run(test_split_run_log, config=config, seeds=seed_list, repos=eligible)
         typer.echo(
-            f"test-split run {_test_split_runs_used(test_split_run_log)} of "
-            f"{MAX_TEST_SPLIT_RUNS} (I5) — recorded in {test_split_run_log}"
+            f"held-out run over {len(eligible)} repo(s) with I5 budget remaining: "
+            f"{', '.join(sorted(eligible))} — recorded in {test_split_run_log}"
         )
 
     all_results: list[RepoResult] = []

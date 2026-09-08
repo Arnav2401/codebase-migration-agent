@@ -1,3 +1,3 @@
-{"at": 1788900000.0, "config": "graph", "seeds": [0], "note": "backfilled: held-out run of 2026-09-08, pass_rate 0.028 (D83)"}
-{"at": 1788861391.620459, "config": "t1_only", "seeds": [0]}
-{"at": 1788868073.199979, "config": "graph", "seeds": [0]}
+{"at": 1788900000.0, "config": "graph", "seeds": [0], "note": "backfilled: held-out run of 2026-09-08, pass_rate 0.028 (D83)", "repos": ["isaacharrisholt__quiffen", "lnbits__lnurl"], "note_d88": "repos backfilled: these were the only test-split repos at the time"}
+{"at": 1788861391.620459, "config": "t1_only", "seeds": [0], "repos": ["isaacharrisholt__quiffen", "lnbits__lnurl"], "note_d88": "repos backfilled: these were the only test-split repos at the time"}
+{"at": 1788868073.199979, "config": "graph", "seeds": [0], "repos": ["isaacharrisholt__quiffen", "lnbits__lnurl"], "note_d88": "repos backfilled: these were the only test-split repos at the time"}

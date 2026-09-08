@@ -7,11 +7,33 @@ from typer.testing import CliRunner
 
 from pmigrate.agent.model_client import GeminiModelClient, GroqModelClient
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.run import _build_model_client, _split_suffix, main
+from pmigrate.eval.run import (
+    _build_model_client,
+    _runs_per_repo,
+    _split_suffix,
+    main,
+)
 
 runner = CliRunner()
 app = typer.Typer()
 app.command()(main)
+
+
+def _manifest_repo(repo_id: str, split: str) -> dict[str, object]:
+    """Minimal RepoSpec-shaped dict for manifest-driven CLI tests."""
+    return {
+        "repo_id": repo_id,
+        "url": f"https://github.com/x/{repo_id}",
+        "pre_sha": "a" * 40,
+        "post_sha": "b" * 40,
+        "python_version": "3.11",
+        "install_cmd": ["pip", "install", "-e", "."],
+        "test_cmd": ["pytest", "-q"],
+        "setup_overrides": [],
+        "split": split,
+        "baseline": None,
+        "human_diff_stats": None,
+    }
 
 
 def _config(**overrides: object) -> EvalConfig:
@@ -202,14 +224,34 @@ def test_main_refuses_split_test_without_the_intent_flag(tmp_path: Path) -> None
     assert "REFUSING --split test without --i-know-what-im-doing" in result.output
 
 
-def test_main_refuses_split_test_once_the_i5_budget_is_exhausted(tmp_path: Path) -> None:
-    """ "At most 3 times total" is worthless if nothing counts -- so this refuses rather
-    than warns, even with the intent flag present."""
+def test_runs_per_repo_counts_each_repo_separately(tmp_path: Path) -> None:
+    """docs/decisions.md D88: the I5 budget attaches to a REPO, not to a global counter.
+    A repo discovered and baselined after the changes being measured carries none of the
+    contamination the cap exists to prevent."""
+    log = tmp_path / "runs.jsonl"
+    log.write_text(
+        json.dumps({"config": "graph", "repos": ["old__a", "old__b"]})
+        + "\n"
+        + json.dumps({"config": "graph", "repos": ["old__a"]})
+        + "\n"
+    )
+
+    assert _runs_per_repo(log) == {"old__a": 2, "old__b": 1}
+    assert _runs_per_repo(tmp_path / "absent.jsonl") == {}
+
+
+def test_main_refuses_split_test_when_every_repo_is_exhausted(tmp_path: Path) -> None:
+    """Refuses only when NO repo has budget left -- and the message points at adding fresh
+    held-out repos rather than at re-measuring spent ones."""
     configs_dir = tmp_path / "configs"
     configs_dir.mkdir()
     (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([_manifest_repo("spent__repo", "test")]))
     log = tmp_path / "runs.jsonl"
-    log.write_text("".join(json.dumps({"config": "graph"}) + "\n" for _ in range(3)))
+    log.write_text(
+        "".join(json.dumps({"config": "graph", "repos": ["spent__repo"]}) + "\n" for _ in range(3))
+    )
 
     result = runner.invoke(
         app,
@@ -221,13 +263,16 @@ def test_main_refuses_split_test_once_the_i5_budget_is_exhausted(tmp_path: Path)
             "--i-know-what-im-doing",
             "--configs-dir",
             str(configs_dir),
+            "--manifest-path",
+            str(manifest),
             "--test-split-run-log",
             str(log),
         ],
     )
 
     assert result.exit_code == 1
-    assert "budget is exhausted" in result.output
+    assert "every held-out repo has spent its" in result.output
+    assert "Add genuinely new held-out repos" in result.output
 
 
 def test_dev_split_is_unaffected_by_the_i5_guard(tmp_path: Path) -> None:

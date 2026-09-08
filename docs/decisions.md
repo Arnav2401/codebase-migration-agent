@@ -4166,6 +4166,50 @@ quietly re-run."
 
 ---
 
+## D88 — I5's budget attaches to a repo, not to a global counter
+
+**The problem this solves.** D87 spent the third and last permitted held-out run on a
+window where the system could not demonstrate anything (quota exhausted, zero repairs
+executed). The held-out number therefore measures T1 alone, while dev has moved to 0.542
+with a working repair tier — and under the old reading of I5 ("at most 3 test-split runs
+TOTAL") that gap was permanently unmeasurable. Extending the corpus with fresh held-out
+repos would not have helped, because the global counter was already at 3.
+
+**Why a global counter was the wrong shape.** I5 exists (D7) to stop anyone iterating
+against the held-out set until its number is memorised. That hazard attaches to a **repo**:
+it is the repo you have seen results for that you can overfit to. A repo discovered,
+validated and baselined AFTER the changes being measured carries none of that
+contamination, and refusing to measure it makes a corpus permanently unable to answer the
+question it was just extended to answer — which protects nothing.
+
+**The budget is now per-repo:** at most `MAX_TEST_SPLIT_RUNS` runs that INCLUDE a given
+repo. This is strictly no weaker against overfitting — you still cannot iterate against any
+individual repo more than three times — while letting the held-out set grow honestly.
+
+**It is explicitly not a reset.** `lnbits__lnurl` and `isaacharrisholt__quiffen` remain
+spent at 3/3 forever; the existing run log was backfilled with the repos each run actually
+measured, so the count reflects history rather than starting fresh. A `--split test` run now
+SKIPS repos at their budget and measures only the rest, rather than refusing outright —
+otherwise a single spent repo would permanently block every fresh repo added beside it. It
+refuses only when no repo has budget left, and the refusal names the correct remedy: add
+genuinely new held-out repos, do not re-measure spent ones.
+
+**The honest risk, stated rather than hidden:** this rule can be abused by adding repos
+whenever a better number is wanted. Two things bound it. Adding held-out repos costs real
+work — the measured yield is ~0.8% (254 candidates for 2 usable repos, D82) — and every
+added repo must be discovered and baselined before it is ever measured, which the manifest
+and this log record. What it must never become is "re-measure until the number improves",
+and the per-repo cap is what makes that impossible for any given repo.
+
+**Interview:** "I'd burned all three held-out runs, one of them on a quota window where
+nothing ran, and the number was stale the moment I fixed the repair tier. The instinct is
+to reset the counter, which quietly destroys the invariant. What I did instead was ask what
+the cap is actually protecting — it protects a repo from being tuned against, so it belongs
+on the repo. Old repos stay spent forever, new ones start fresh, and a run measures only
+the repos that still have budget. The rule is no weaker and the corpus can still grow."
+
+---
+
 ## Template
 
 ```
