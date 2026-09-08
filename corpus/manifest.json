@@ -2314,16 +2314,21 @@
     }
   },
   {
-    "repo_id": "COSCUP__COSCUP-Volunteer",
-    "url": "https://github.com/COSCUP/COSCUP-Volunteer",
-    "pre_sha": "e06dd321fc041b294e10e6df302d7cc8eb2aa98c",
-    "post_sha": "b0b6eac4c93fb52a8a7051209343e5d2733985cf",
+    "repo_id": "Netflix__repokid",
+    "url": "https://github.com/Netflix/repokid",
+    "pre_sha": "5092f8bcd8466397df95951aa8bb7bed55213863",
+    "post_sha": "e466a8bc2629b0e61b5a8c48206d72786cb0b3f9",
     "python_version": "3.11",
     "install_cmd": [
       "pip",
       "install",
       "-e",
-      ".[test]"
+      ".",
+      "&&",
+      "pip",
+      "install",
+      "mock",
+      "python-dateutil"
     ],
     "test_cmd": [
       "pytest",
@@ -2333,25 +2338,23 @@
     "split": "test",
     "baseline": null,
     "human_diff_stats": {
-      "files_changed": 15,
-      "lines_added": 276,
-      "lines_removed": 213,
+      "files_changed": 13,
+      "lines_added": 212,
+      "lines_removed": 151,
       "changed_paths": [
-        "api/apistructs/items.py",
-        "api/apistructs/projects.py",
-        "api/apistructs/sender.py",
-        "api/apistructs/tasks.py",
-        "api/apistructs/teams.py",
-        "api/apistructs/users.py",
-        "module/api_token.py",
-        "module/budget.py",
-        "module/skill.py",
-        "poetry.lock",
-        "pyproject.toml",
-        "structs/projects.py",
-        "structs/tasks.py",
-        "structs/teams.py",
-        "structs/users.py"
+        "README.md",
+        "repokid/commands/repo.py",
+        "repokid/commands/role.py",
+        "repokid/commands/role_cache.py",
+        "repokid/commands/schedule.py",
+        "repokid/role.py",
+        "repokid/tests/test_commands.py",
+        "repokid/tests/test_hooks.py",
+        "repokid/tests/test_roledata.py",
+        "repokid/utils/roledata.py",
+        "requirements.in",
+        "requirements.txt",
+        "setup.py"
       ]
     }
   }

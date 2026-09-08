@@ -3823,6 +3823,55 @@ changed no outcome; saying so is the difference between a finding and a story."
 
 ---
 
+## D81 — Widened discovery to 163 candidates; the test split still has no usable repo
+
+**Why:** D79 established the corpus had no test half at all. Closing that needs candidates
+that survive *baseline capture*, which is the real gate — not just commit location.
+
+**What was done.** Discovery queries went from 5+5 to 8+9, adding the phrasings the
+original set misses ("upgrade pydantic", "pydantic-settings") and four more v1 APIs that v2
+removed or renamed (`root_validator`, `from pydantic import validator`, `model_validator`,
+`parse_raw`) on the same reasoning D34 gives for `parse_obj`: code still containing one is
+either mid-migration or migrated without cleaning every call site. Pool: 103 → 126 → 163.
+
+**Result: 2 new survivors from 60 fresh candidates, and neither can be baselined.**
+
+- `COSCUP__COSCUP-Volunteer` — Poetry with `package-mode = false`, so `pip install -e .` is
+  impossible, and its tests import MongoDB-backed models while the harness runs a single
+  container with no side services. Permanently unusable here; removed from the manifest by
+  hand, which is the curation step `capture_baselines.py` deliberately leaves to a human.
+- `Netflix__repokid` — kept, `split="test"`, `baseline: null`. Four install strategies were
+  tried. Its `requirements.txt` is a pinned 2020 lockfile that will not resolve on 3.11;
+  `requirements-test.txt` drags in `typed-ast` via `black==19.10b0`, which cannot compile
+  on 3.11 at all. Installing via `setup.py`'s UNPINNED `requirements.in` finally builds and
+  runs the whole suite — and then fails the post_sha sanity gate at **0.69**: only 69% of
+  baseline-passing tests still pass at the human's own migration commit. Pinning the era
+  instead (Python 3.8 + its own lockfile) never finishes the Docker build, exceeding the
+  deadline compiling old wheels from source.
+
+**The gate is right and the repo is wrong.** A post_sha check below threshold means the
+ground-truth commit does not itself restore the tests in this environment, so the agent
+could never match it — scoring against that repo would measure environment drift, not
+migration quality. Left in the manifest at the configuration that got furthest (3.11,
+unpinned) so the next attempt starts from the informative failure rather than a build that
+never runs.
+
+**Status: phase-5-eval.md's test-split criterion remains blocked**, now for a sharper
+reason than D79's. The split exists structurally; what is missing is a repo whose own
+migration commit reproduces. Candidate yield is the binding constraint: 163 candidates have
+produced 8 repos that locate a commit cleanly and exactly 7 that survive baseline capture,
+all of them already spent on dev.
+
+**Interview:** "I widened the search from 103 to 163 candidates and got two new repos,
+neither usable — one needs MongoDB, the other fails the post-migration sanity check at 69%.
+That check is the interesting part: it verifies the human's OWN migration commit still
+passes the tests, and if it doesn't, that repo is useless as ground truth no matter how
+good your agent is. The honest read is that the binding constraint on this corpus isn't
+finding repos that migrated, it's finding ones whose migration still reproduces in a clean
+container years later."
+
+---
+
 ## Template
 
 ```

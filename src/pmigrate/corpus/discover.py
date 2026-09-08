@@ -48,6 +48,13 @@ COMMIT_MESSAGE_QUERIES = [
     "bump pydantic language:python",
     "pydantic>=2 language:python",
     "pydantic 2.0 migration language:python",
+    # D81: added after the original five exhausted their yield -- 126 candidates produced
+    # exactly one new survivor, and it failed baseline capture. These phrase the same event
+    # the ways the first five miss: "upgrade" rather than "migrate"/"bump", and the two
+    # library names a migration commit most often mentions in passing.
+    "upgrade pydantic language:python",
+    "pydantic 2 upgrade language:python",
+    "pydantic-settings language:python",
 ]
 
 CODE_SEARCH_QUERIES = [
@@ -65,6 +72,15 @@ CODE_SEARCH_QUERIES = [
     # every call site — both are real candidates for validate.py to locate a commit for.
     "pydantic.v1 language:python",
     "parse_obj language:python",
+    # D81, same reasoning as `parse_obj` above: each of these is a v1 API that v2 REMOVED
+    # or renamed, so current code containing one is either mid-migration or migrated
+    # without cleaning every call site. `model_validator` is the v2 side of the same
+    # boundary (the rename of `root_validator`), included so repos that finished the
+    # rename but kept v1 shims elsewhere still surface.
+    "root_validator language:python",
+    "from pydantic import validator language:python",
+    "model_validator language:python",
+    "parse_raw language:python",
 ]
 
 
