@@ -3963,6 +3963,54 @@ from the stored rows instead of re-running, precisely so the fix didn't cost a s
 
 ---
 
+## D84 — I5 is now enforced by the harness, not by memory; and the held-out tier decomposition
+
+**The finding first.** Test-split run 2 spent on `t1_only` returns **0.028** — identical to
+`graph`'s held-out 0.028, repo for repo (`lnbits__lnurl` 0.056, `isaacharrisholt__quiffen`
+0.000). `graph` runs T1 + LLM repair and applied a real patch; `t1_only` never calls a
+model and costs $0.00. **On held-out data the entire capability of this system is T1's
+deterministic codemods, and the LLM repair tier contributes exactly zero.** D78 established
+that on dev; this establishes it where nothing was tuned.
+
+**Why enforcement was needed.** PLAN.md's I5 row has always specified "eval harness refuses
+`--split test` without `--i-know-what-im-doing`". It was never implemented — I ran the
+held-out split (D83) with a bare `--split test` and nothing objected. Worse, "at most 3
+times total" was tracked by nobody: run 1 was partly spent recovering from a filename
+collision (D83) that a counter would have made obvious.
+
+**Fixed by** two independent gates in `eval/run.py`, both checked before any Docker or model
+work so a refusal is free:
+1. `--i-know-what-im-doing` is required for `--split test`, so the held-out split cannot be
+   reached by a stray flag or a loop over splits.
+2. A hard budget against `corpus/test_split_runs.jsonl`, which records every test-split
+   invocation. At 3, the command REFUSES rather than warns — a warning on the run that
+   destroys the value of the number is worth nothing.
+
+Run 1 was backfilled into the log so the budget reflects reality. `dev` is untouched.
+
+**Alternatives:** warn instead of refuse at the cap — rejected: the cost of exceeding it is
+that the held-out number quietly stops meaning anything, which is not a condition a warning
+repairs. Track the count in `eval_results.db` — rejected: the DB is derived state that gets
+cleared per-arm routinely in this project (that is how resumability is bypassed), so a
+budget living there would silently reset.
+
+**Deliberately NOT done: the remaining five arms on the test split.** That would need 5 more
+runs against a budget of 1, and it is the wrong experiment regardless — `wholefile` vs
+`embedding` vs `no_triage` are development questions about which retrieval or triage
+strategy to build, and answering them on held-out data is exactly the overfitting D7 exists
+to prevent. The held-out split answers "what does the finished system do on unseen code",
+and two runs have now answered it: 0.028, all of it codemods.
+
+**Interview:** "The plan said the harness should refuse to touch the held-out split without
+an explicit flag, and it never did — I found that by running it and nothing stopping me.
+So I implemented both halves: the intent flag and an actual counter, because 'at most three
+times' enforced by memory isn't enforced. Then I spent run two on the codemods-only arm,
+which was the highest-value question left: it came back identical to the full pipeline, so
+on unseen repos the LLM tier adds nothing and the number is entirely the deterministic
+codemods."
+
+---
+
 ## Template
 
 ```

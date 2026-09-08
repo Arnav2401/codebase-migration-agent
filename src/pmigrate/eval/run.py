@@ -92,6 +92,27 @@ _MODEL_CLIENT_FACTORIES: dict[str, Callable[[str], ModelClient]] = {
 }
 
 
+TEST_SPLIT_RUN_LOG = Path("corpus/test_split_runs.jsonl")
+MAX_TEST_SPLIT_RUNS = 3
+
+
+def _test_split_runs_used(log_path: Path) -> int:
+    if not log_path.exists():
+        return 0
+    return sum(1 for line in log_path.read_text().splitlines() if line.strip())
+
+
+def _record_test_split_run(log_path: Path, *, config: str, seeds: list[int]) -> None:
+    """Appends one line per `--split test` invocation (docs/decisions.md D84). The budget
+    is an invariant (I5/D7: at most 3 ever), and an invariant enforced by memory is not
+    enforced -- this project already spent run 1 partly to recover from a filename bug
+    (D83) precisely because nothing was counting."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"at": time.time(), "config": config, "seeds": seeds}
+    with log_path.open("a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+
+
 def _split_suffix(split: str) -> str:
     """docs/decisions.md D83: results and manifests are named per SPLIT, not just per arm.
     `dev` keeps the bare `<arm>.md` name so every existing artifact and doc link is
@@ -134,6 +155,16 @@ def main(
     max_workers: int = 1,
     total_usd_cap: float | None = None,
     clone_cache_root: Path = DEFAULT_CLONE_CACHE_ROOT,
+    test_split_run_log: Path = TEST_SPLIT_RUN_LOG,
+    i_know_what_im_doing: bool = typer.Option(
+        False,
+        "--i-know-what-im-doing",
+        help=(
+            "Required for --split test (PLAN.md I5 / docs/decisions.md D7): the held-out "
+            "split may be run at most 3 times TOTAL across the life of the project. "
+            "Runs are counted in corpus/test_split_runs.jsonl."
+        ),
+    ),
     seeds: str = typer.Option(
         "0",
         help=(
@@ -148,6 +179,30 @@ def main(
         raise typer.BadParameter(f"split must be 'dev' or 'test', got {split!r}")
     if max_workers < 1:
         raise typer.BadParameter(f"max_workers must be >= 1, got {max_workers}")
+
+    # PLAN.md I5 / docs/decisions.md D7+D84. Two separate gates: an intent flag, so the
+    # held-out split can never be touched by a stray `--split test` or a loop over splits,
+    # and a hard budget, because "at most 3 times total" is worthless if nobody counts.
+    # Checked before any Docker/model work so a refusal costs nothing.
+    if split == "test":
+        used = _test_split_runs_used(test_split_run_log)
+        if not i_know_what_im_doing:
+            typer.echo(
+                f"REFUSING --split test without --i-know-what-im-doing (PLAN.md I5). "
+                f"The held-out split may be run at most {MAX_TEST_SPLIT_RUNS} times ever; "
+                f"{used} used so far. Every prompt/model change belongs on --split dev.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if used >= MAX_TEST_SPLIT_RUNS:
+            typer.echo(
+                f"REFUSING --split test: the I5 budget is exhausted "
+                f"({used}/{MAX_TEST_SPLIT_RUNS} runs used, logged in {test_split_run_log}). "
+                "Spending more would make the held-out number meaningless -- that is the "
+                "whole point of the invariant, so this refuses rather than warns.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     try:
         seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
@@ -177,6 +232,13 @@ def main(
 
     specs = load_manifest(manifest_path)
     c_sha = corpus_sha(manifest_path)
+
+    if split == "test":
+        _record_test_split_run(test_split_run_log, config=config, seeds=seed_list)
+        typer.echo(
+            f"test-split run {_test_split_runs_used(test_split_run_log)} of "
+            f"{MAX_TEST_SPLIT_RUNS} (I5) — recorded in {test_split_run_log}"
+        )
 
     all_results: list[RepoResult] = []
     store = ResultStore(results_db)

@@ -175,3 +175,71 @@ def test_split_suffix_keeps_dev_bare_and_namespaces_other_splits() -> None:
     overwriting an unrelated one. `dev` stays bare so existing artifacts keep their paths."""
     assert _split_suffix("dev") == ""
     assert _split_suffix("test") == ".test"
+
+
+def test_main_refuses_split_test_without_the_intent_flag(tmp_path: Path) -> None:
+    """PLAN.md I5 / docs/decisions.md D7+D84: the held-out split must never be reachable
+    by a stray --split test or a loop over splits."""
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            "graph",
+            "--split",
+            "test",
+            "--configs-dir",
+            str(configs_dir),
+            "--test-split-run-log",
+            str(tmp_path / "runs.jsonl"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "REFUSING --split test without --i-know-what-im-doing" in result.output
+
+
+def test_main_refuses_split_test_once_the_i5_budget_is_exhausted(tmp_path: Path) -> None:
+    """ "At most 3 times total" is worthless if nothing counts -- so this refuses rather
+    than warns, even with the intent flag present."""
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    (configs_dir / "graph.json").write_text(json.dumps(_config().to_dict()))
+    log = tmp_path / "runs.jsonl"
+    log.write_text("".join(json.dumps({"config": "graph"}) + "\n" for _ in range(3)))
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            "graph",
+            "--split",
+            "test",
+            "--i-know-what-im-doing",
+            "--configs-dir",
+            str(configs_dir),
+            "--test-split-run-log",
+            str(log),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "budget is exhausted" in result.output
+
+
+def test_dev_split_is_unaffected_by_the_i5_guard(tmp_path: Path) -> None:
+    """The guard must not make ordinary dev runs harder. Uses a missing config so the
+    command still exits early -- invoking a VALID dev config here would run the real
+    corpus against Docker and hang, which is why the other tests in this file also assert
+    against early-exit paths only."""
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+
+    result = runner.invoke(app, ["--config", "absent", "--configs-dir", str(configs_dir)])
+
+    assert result.exit_code == 1
+    assert "no config at" in result.output  # got past the I5 gate to normal validation
+    assert "REFUSING --split test" not in result.output

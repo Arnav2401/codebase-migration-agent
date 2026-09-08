@@ -20,8 +20,9 @@
 > what a held-out split exists to reveal, and exactly why relabelling tuned-against dev
 > repos as "test" (rejected in D79) would have hidden it.
 >
-> Consistent with D78: the repair tier applied 1 patch here and the outcome still tracks
-> what T1 alone would do.
+> **Confirmed by run 2:** `t1_only` on the same held-out repos returns 0.028 too, repo for
+> repo (`docs/results/t1_only.test.md`). The repair tier applied a real patch here and
+> added exactly nothing — D78's null result, now established on held-out data.
 
 **2 repos** — 0 full green (every seed passed), mean pass rate 0.028, total cost $0.00
 
