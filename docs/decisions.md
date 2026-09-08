@@ -4210,6 +4210,54 @@ the repos that still have budget. The rule is no weaker and the corpus can still
 
 ---
 
+## D89 — A third discovery round added zero held-out repos, and that is the finding
+
+**What was tried.** D88 made the I5 budget per-repo so the held-out set could grow, which
+is only useful if it actually can. Five more v1-only search markers were added
+(`underscore_attrs_are_private`, `json_encoders`, `parse_obj_as`, `copy_on_model_validation`,
+`validate_arguments`) on D82's reasoning: each was removed or renamed in v2, so its presence
+proves a codebase touched v1.
+
+**What happened.** Pool 254 -> 325. The 89 fresh candidates produced 5 validation survivors
+— `quantumjot__btrack`, `abersheeran__kui`, `maxrdu__fastapi_login`, `dr-leo__pandaSDMX`,
+`WaylonWalker__markata` — and **none captured a baseline**:
+
+| repo | why it failed |
+|---|---|
+| `quantumjot__btrack` | suite does not collect |
+| `maxrdu__fastapi_login` | suite does not collect |
+| `dr-leo__pandaSDMX` | suite does not collect |
+| `abersheeran__kui` | 0 tests pass, floor is 15 |
+| `WaylonWalker__markata` | 3 tests pass, floor is 15 |
+
+All five removed by hand, per D82's precedent: a test repo with no baseline is unusable
+under I4 and makes `run_repo` raise. The held-out set is unchanged at 2 repos, both already
+at their 3-run budget, so the held-out number is still 0.028 measured on T1 alone.
+
+**The real constraint, now measured three times.** Cumulative yield across all rounds is
+**325 candidates -> 2 usable held-out repos, ~0.6%**. Discovery is not the bottleneck and
+never was: finding repos that migrated pydantic is easy, and D80 already showed that fixing
+a clone bug affecting 27% of drops recovered nothing. The bottleneck is that a corpus repo
+must still *build and run its suite in a clean container years later* — three of five
+survivors here fail at collection, and two have suites too small to score. That is a
+property of the Python ecosystem, not of this search.
+
+**What this means for the held-out question.** Whether D85/D86's dev improvement
+(0.396 -> 0.542) generalizes remains unmeasured, and cannot be answered by trying harder at
+discovery with the current acceptance bar. The realistic options are to lower the 15-test
+floor (weakens every score), to allow repos needing service containers (a real harness
+change), or to accept the question as open. Recorded rather than quietly retried a fourth
+time.
+
+**Interview:** "I made the held-out budget per-repo so the corpus could grow, then spent a
+round proving it could not — 89 new candidates, five survived validation, zero produced a
+baseline. Three of them cannot even collect their tests today. The cumulative yield is 0.6%,
+and the filter that kills everything is not 'did this repo migrate pydantic', it's 'does its
+suite still run in a clean container years later'. That's worth knowing precisely, because
+the obvious next move — search harder — is the one that does not work."
+
+---
+
 ## Template
 
 ```
