@@ -4446,6 +4446,56 @@ wrong thing, which is a different bug from getting the number wrong."
 
 ---
 
+## D94 — Phase 6b: the PR body is generated from the trace, and I7 fails closed
+
+**Built:** `pr/allowlist.py` (invariant I7) and `pr/body.py`, which turns a run's trace into
+a draft PR body covering everything phase-6-trace-pr.md asks for — what changed grouped by
+source with the codemod rule ids that fired, test results, failure classes, confidence with
+its component breakdown, cost, and iteration count. Verified against a real trace
+(`madkote__fastapi-plugins`, `graph` arm).
+
+**The body is generated from the trace and nothing else.** Same discipline as `replay`
+(D90) and `mechanical_split` (D93): if the body can only be written from the trace, then the
+trace demonstrably contains the run. A field this could not fill would be a gap in the
+trace, which is worth finding here rather than assuming completeness because nothing had
+ever asked.
+
+**I7 fails closed.** `assert_allowed_target` is a chokepoint every PR path must cross, the
+allowlist is an explicit set of owners rather than a pattern (a pattern matching
+`Arnav2401` would eventually match `Arnav2401Evil`, which is a test case), an unparseable
+target refuses rather than passes, and `ForkTargetError` is its own type so a broad
+`except ValueError` around argument parsing cannot swallow it.
+
+**The review threshold is deliberately strict at 0.95**, which labels almost everything for
+human review. That is not timidity: D92/D93 measured this exact score as over-confident —
+the top bucket predicts 0.94 and delivers 0.46 — so a threshold that trusted high scores
+would wave through precisely the runs the calibration says to distrust. The body says so in
+its own text, citing the project's calibration file, because an automated PR that buries
+its own uncertainty is worse than one that never opened.
+
+**A labelling bug the real run caught.** The first draft reported "before: 20/20, after:
+28/28", which is wrong twice: the agent's first test run happens AFTER T1's codemods have
+already applied, so it is not a baseline, and the denominator legitimately grows when
+fixing an import error makes previously-uncollectable tests visible. Now labelled "first
+measured (after T1 codemods)" and "final", with the changing denominator explained. The
+true pre-migration baseline lives in the corpus manifest, not the trace — so claiming it
+here would have meant asserting a number the trace cannot support, which is the one thing
+this generator is built not to do.
+
+**Not done, deliberately: no PR has been opened.** Pushing a branch and opening a PR is an
+outward-facing action against a real GitHub account, so the workflow is built and dry-run
+but not fired. phase-6-trace-pr.md's "a real draft PR opened on your own fork" therefore
+stays unticked, and honestly so.
+
+**Interview:** "The PR body is generated entirely from the audit trace, which is the second
+job the trace does for its keep — if the body can only be written from the trace, the trace
+really does contain the run. The detail I'd point at is the review threshold: it's set so
+strictly that nearly everything gets flagged, because my own calibration showed the
+confidence score is over-confident. It would have been easy to pick a threshold that let
+most runs through and looked better in a demo."
+
+---
+
 ## Template
 
 ```

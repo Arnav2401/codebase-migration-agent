@@ -64,7 +64,10 @@ disproportionately strong signal that you know what you're doing.
   a LOWER BOUND when any call lacks a price, but has NOT yet been reconciled against a
   provider invoice.
 - [ ] Dashboard shows runs, timeline, cost, failure classes
-- [ ] A real draft PR opened on your own fork of a corpus repo, body generated from the trace
+- [~] A real draft PR opened on your own fork of a corpus repo, body generated from the
+  trace — the body generator and the I7 fork-only guard are built, tested and dry-run
+  against a real trace (D94, `/tmp/pr_body.md`). NO PR has been opened: pushing to
+  GitHub is an outward-facing action and is left for an explicit go-ahead.
 - [x] Confidence score defined, calibrated, and its calibration plotted (D92,
   `docs/results/calibration.md`). The plot's finding is that the score RANKS but is
   over-confident (+0.50 in the top bucket); weights were deliberately not fitted to the
