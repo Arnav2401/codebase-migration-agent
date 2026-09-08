@@ -80,6 +80,11 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/fixtures/hostile/ asserts a CONTAINER's confinement (no network, read-only root,
+# non-root uid). Those assertions are false on a developer laptop by construction, so the
+# host run must not collect them -- they are exercised inside the sandbox, and their FLAGS
+# are asserted on the host by tests/sandbox/test_hostile_policy.py (docs/decisions.md D97).
+norecursedirs = ["tests/fixtures"]
 # TestOutcome/TestRun (types.py) are plain dataclasses that happen to start with "Test" —
 # pytest's default class-collection heuristic (`Test*`) flags them and warns that they
 # can't be collected (they have __init__). Every test in this project is a bare function

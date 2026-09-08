@@ -4604,6 +4604,50 @@ not the defence."
 
 ---
 
+## D97 — Every eval run in this project executed with a live network, and Phase 2 had said otherwise
+
+**The bug.** `build_run_args` emitted `--network none` only when `policy.network == "none"`.
+`SandboxPolicy()` defaults to `"build-only"`, and `eval/harness.py` constructs exactly that
+(`policy or SandboxPolicy()`). So every migration this project ever ran — every arm, every
+seed, every held-out run — executed model-generated code and arbitrary repo test suites
+inside a container attached to Docker's default bridge network.
+
+**Phase 2 recorded this as verified.** Its acceptance criteria say "Network is provably off
+at run time", backed by a live test. That test passed `network="none"` explicitly. No
+production caller ever did. The test was true and the claim it supported was false, which
+is the more dangerous shape of green test: it tested a configuration nobody used.
+
+**Fixed** by always emitting `--network none` at run time. Both policy values mean "no
+network while untrusted code executes"; `build-only` grants it to the BUILD stage
+(`build_build_args`), where only declared dependency installs run. The field now affects
+only the build, which is what its name always claimed.
+
+**What the exposure actually was.** Bounded but real: the sandbox still ran `--cap-drop ALL`,
+`--read-only`, non-root, `--pids-limit`, with no docker socket and no host bind mounts, so
+this was not a container escape. It was an open egress channel from code that Phase 7b
+explicitly treats as untrusted — the one channel that would turn a successful prompt
+injection into exfiltration. D96 measured 15 injections against the claim that "the sandbox
+has no network", and for the default policy that claim was wrong when it was made.
+
+**Now proven rather than asserted.** `tests/fixtures/hostile/` is a suite that runs INSIDE
+the container and asserts its own confinement — socket connect fails, DNS fails, `/etc` is
+read-only, uid is not 0, no `/var/run/docker.sock`, no host paths visible. Verified live:
+7/7 pass under the default policy. It is excluded from host collection via
+`norecursedirs`, because on a laptop every one of those assertions is false by construction.
+`tests/sandbox/test_hostile_policy.py` asserts each flag on the host against
+`SandboxPolicy()` specifically — the default, never a hand-built hardened policy, since
+testing the hardened one is what hid this for six phases.
+
+**Interview:** "Phase 2's criteria said network was provably off at run time, and there was
+a passing live test to back it. The test constructed a policy with network disabled; the
+harness constructed the default, which had it enabled — so every eval run I did executed
+untrusted repo code with egress. It never bit me, and it invalidated a security claim I'd
+already written down. The fix was one line; the lesson was that the fixture in a security
+test has to be the object production actually builds, so the new tests assert the default
+policy by name."
+
+---
+
 ## Template
 
 ```

@@ -84,8 +84,15 @@ def build_run_args(
     if overlay_dir is not None:
         args += ["-v", f"{overlay_dir.resolve()}:{OVERLAY_MOUNT_PATH}:ro"]
 
-    if policy.network == "none":
-        args += ["--network", "none"]
+    # ALWAYS off at run time (docs/decisions.md D97, phase-7-guardrails.md 7a). Both policy
+    # values mean "no network while untrusted code executes" -- `build-only` grants it to the
+    # BUILD stage (`build_build_args`, where only declared dependency installs run), never
+    # here. This previously read `if policy.network == "none"`, so the default policy the
+    # harness actually uses (`SandboxPolicy()` -> "build-only") ran every migration with
+    # Docker's default bridge network attached. Phase 2 recorded "network is provably off at
+    # run time" on the strength of a test that passed `network="none"` explicitly, which no
+    # production caller did.
+    args += ["--network", "none"]
 
     args += ["--memory", f"{policy.memory_mb}m", "--memory-swap", f"{policy.memory_mb}m"]
     args += ["--cpus", str(policy.cpus)]

@@ -62,7 +62,9 @@ defence in depth working.
 
 ## Acceptance criteria
 
-- [ ] Hostile-fixture suite (Phase 2) passes with the hardened policy
+- [x] Hostile-fixture suite (Phase 2) passes with the hardened policy — 7/7 inside a real
+      container under the DEFAULT policy (`tests/fixtures/hostile/`). Doing this found
+      that run-time network had never actually been off for any production run (D97).
 - [x] Injection corpus built with ≥10 planted injections across ≥5 repos (15 across 5,
   `tests/fixtures/injection/`)
 - [x] Measured resistance rate reported in `docs/results/security.md`, broken down by
