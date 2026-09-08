@@ -8,6 +8,7 @@ import typer
 from pmigrate.corpus import capture_baselines, discover, validate
 from pmigrate.eval import report_cli as eval_report
 from pmigrate.eval import run as eval_run
+from pmigrate.trace import replay_cli
 from pmigrate.triage import label
 
 app = typer.Typer(help="Autonomous Pydantic v1->v2 migration agent.")
@@ -26,6 +27,10 @@ eval_app = typer.Typer(help="Run the migration loop across the corpus and score 
 eval_app.command("run")(eval_run.main)
 eval_app.command("report")(eval_report.main)
 app.add_typer(eval_app, name="eval")
+
+# Phase 6a: replay is the trace's completeness test, so it is a top-level verb --
+# `pmigrate replay <run_id>` exactly as phase-6-trace-pr.md names it.
+app.command("replay")(replay_cli.main)
 
 
 if __name__ == "__main__":

@@ -4258,6 +4258,55 @@ the obvious next move — search harder — is the one that does not work."
 
 ---
 
+## D90 — Phase 6a: the trace, and why redaction scrubs text rather than fields
+
+**Why now:** Phase 6 was locked until `docs/results/main.md` had real numbers. It does
+(D87), so this starts it. The trace is what makes I6 ("runs reproducible") real, and this
+project needs it more than most: provider quota means a re-run is a *different* experiment
+(D74), so "just run it again to see what happened" has never been available here.
+
+**Built** to docs/interfaces.md §7 exactly — `TraceEvent(run_id, span_id, parent_span, ts,
+kind, payload, tokens_in, tokens_out, usd)`, JSONL per run — plus `pmigrate replay <run_id>`.
+
+**Replay reads the trace and nothing else.** Not `eval_results.db`, not the overlay, not the
+manifest. phase-6-trace-pr.md calls replay the completeness test ("if you can't replay it,
+the trace is incomplete"), and a replay that joins against other sources cannot fail that
+test: it would paper over exactly the gaps it exists to expose.
+
+**Redaction scrubs serialized TEXT, not named fields.** The obvious design is an allowlist
+of keys to drop (`api_key`, `authorization`). It would have failed on this project's own
+logs, where a Gemini key appeared in full inside a 429 error *message*, because the API
+takes the key as a URL query parameter — nothing was called `api_key`, the secret was
+embedded in a string that also carried the information worth keeping. So `redact` runs
+patterns for every key shape this project has actually held (Gemini `AQ.`/`AIza`, Groq
+`gsk_`, OpenAI `sk-`, NVIDIA `nvapi-`, GitHub `gh?_`) across all nested strings. Home
+directories are rewritten to `~` rather than dropped: Phase 6 forbids paths containing the
+username, not paths, and the path is the useful half.
+
+**Unpriced LLM calls are surfaced, not summed as zero.** `usd` is `None` rather than 0.0
+when a call's cost was never recorded, and `ReplaySummary` reports the total as a LOWER
+BOUND with a warning when any exist. Phase 6's acceptance criterion is that cost accounting
+matches the provider's billing; a missing price silently totalled as $0.00 still looks
+plausible, which is the failure mode that makes an audit trail worthless. Same reasoning as
+D57's optional metrics and D71's refusal to treat "not measured" as a real zero.
+
+**`emit` fsyncs.** A run killed by a rate limit or a dead container is precisely the run
+whose trace matters, and a buffered write loses the last events — the ones explaining why.
+
+**Not yet done in this phase:** wiring emission into `agent/graph.py` and the eval harness
+(so far the module is built and tested, but no real run writes one), the SQLite index, the
+dashboard, the PR workflow, and the confidence score. Recorded so the phase's state is not
+overstated: `pmigrate replay` works, and currently has only synthetic traces to replay.
+
+**Interview:** "The trace is what makes the eval numbers auditable, which matters more here
+than usual because API quota meant I could never reproduce a run by re-running it. The
+design detail I'd point at is redaction: the obvious approach is to drop fields named like
+secrets, and that would have missed the actual leak in my own logs — a Gemini key inside a
+429 error message, because that API passes the key in the URL. So it scrubs text by key
+shape instead of trusting field names."
+
+---
+
 ## Template
 
 ```
