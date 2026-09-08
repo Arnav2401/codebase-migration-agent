@@ -3922,6 +3922,47 @@ still passes years later."
 
 ---
 
+## D83 — Result files are named per split; the held-out number is 0.028
+
+**The result first.** phase-5-eval.md's final criterion — "Test split run **once**, at the
+end, and the number is whatever it is (I5)" — is now met. Held-out `pass_rate` = **0.028**
+(`lnbits__lnurl` 0.056, `isaacharrisholt__quiffen` 0.000), against a dev-split 0.396 for the
+same `graph` arm. This was test-split run **1 of at most 3** permitted by D7/I5.
+
+That 0.396 → 0.028 gap is the most informative number in the project. The dev figure rests
+largely on `iscc__iscc-core` going full green under T1's codemods; on two repos nobody
+tuned against, the pipeline recovers 5.6% of one suite and none of the other. N=2, so it
+bounds nothing — but it establishes direction, and it is precisely what D79 was protecting
+when it refused to relabel tuned-against dev repos as "test."
+
+**The bug this run exposed.** `eval/run.py` wrote results to `out_dir / f"{config}.md"` and
+manifests to `f"{config}.manifest.json"` with no reference to `--split`. So the test run
+silently overwrote `docs/results/graph.md` — the dev write-up and its hand-written caveat —
+and its manifest. Worse than an ordinary lost file: I5/D7 ration test-split runs to three
+ever, so a filename collision can spend a scarce, deliberately-limited measurement to
+destroy an unrelated one, and nothing in the output says it happened.
+
+**Alternatives:** always suffix, including dev (`graph.dev.md`) — rejected: it renames every
+existing artifact and every doc link pointing at them, for no benefit to the case that was
+already correct. Refuse to run a split whose file exists — rejected: re-running an arm is
+routine and overwriting your own prior result for the SAME split is the intended behavior.
+
+**Fixed by** `_split_suffix`: `dev` stays bare (`graph.md`, so nothing existing moves) and
+any other split is namespaced (`graph.test.md`, `graph.test.seed1.manifest.json`).
+Regression-tested. The clobbered dev files were restored from git, and
+`docs/results/graph.test.md` was rebuilt from the rows already in `eval_results.db` rather
+than by re-running — re-running would have spent a second of the three permitted test runs
+to recover from a bug.
+
+**Interview:** "The held-out number came in at 2.8% against 39.6% on dev, which is the
+finding — the dev number was optimistic about code nobody had tuned against. The run also
+exposed that result files were named per arm and not per split, so the test run overwrote
+the dev write-up. What made that more than a nuisance is that the test split is rationed to
+three runs ever, so a name collision can burn a scarce measurement. I rebuilt the report
+from the stored rows instead of re-running, precisely so the fix didn't cost a second run."
+
+---
+
 ## Template
 
 ```

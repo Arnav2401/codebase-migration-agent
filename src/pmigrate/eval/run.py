@@ -92,6 +92,17 @@ _MODEL_CLIENT_FACTORIES: dict[str, Callable[[str], ModelClient]] = {
 }
 
 
+def _split_suffix(split: str) -> str:
+    """docs/decisions.md D83: results and manifests are named per SPLIT, not just per arm.
+    `dev` keeps the bare `<arm>.md` name so every existing artifact and doc link is
+    unaffected; any other split gets `<arm>.<split>.md`. Found live -- one `--split test`
+    run silently overwrote `docs/results/graph.md`, destroying the dev write-up and its
+    hand-written caveat. That is worse than a lost file here: I5/D7 permit at most three
+    test-split runs ever, so a collision can consume a scarce, deliberately-rationed
+    measurement to overwrite an unrelated one."""
+    return "" if split == "dev" else f".{split}"
+
+
 def _build_model_client(config: EvalConfig) -> ModelClient | None:
     """None for a t1_only config (docs/decisions.md D62) -- run_corpus/run_repo already
     treat model_client=None as "no repair," and D62's own consistency check would reject
@@ -183,10 +194,11 @@ def main(
                 agent_git_sha=agent_git_sha(Path.cwd()),
                 started_at=time.time(),
             )
+            suffix = _split_suffix(split)
             manifest_name = (
-                f"{config}.manifest.json"
+                f"{config}{suffix}.manifest.json"
                 if len(seed_list) == 1
-                else f"{config}.seed{seed}.manifest.json"
+                else f"{config}{suffix}.seed{seed}.manifest.json"
             )
             manifest_out = out_dir / manifest_name
             write_run_manifest(manifest, manifest_out)
@@ -209,7 +221,8 @@ def main(
     finally:
         store.close()
 
-    write_results_table(all_results, out_dir / f"{config}.md", config_name=base_config.name)
+    results_name = f"{config}{_split_suffix(split)}.md"
+    write_results_table(all_results, out_dir / results_name, config_name=base_config.name)
 
     full_green = sum(1 for r in all_results if r.full_green)
     typer.echo(

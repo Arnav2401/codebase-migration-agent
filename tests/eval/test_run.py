@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from pmigrate.agent.model_client import GeminiModelClient, GroqModelClient
 from pmigrate.eval.config import EvalConfig
-from pmigrate.eval.run import _build_model_client, main
+from pmigrate.eval.run import _build_model_client, _split_suffix, main
 
 runner = CliRunner()
 app = typer.Typer()
@@ -166,3 +166,12 @@ def test_every_shipped_config_loads_as_a_valid_eval_config() -> None:
     for path in config_paths:
         config = EvalConfig.from_dict(json.loads(path.read_text()))
         assert config.name == path.stem
+
+
+def test_split_suffix_keeps_dev_bare_and_namespaces_other_splits() -> None:
+    """docs/decisions.md D83, found live: a `--split test` run wrote to the same
+    `graph.md` a `--split dev` run had produced and destroyed it. I5/D7 cap test-split
+    runs at three ever, so a filename collision can spend a rationed measurement
+    overwriting an unrelated one. `dev` stays bare so existing artifacts keep their paths."""
+    assert _split_suffix("dev") == ""
+    assert _split_suffix("test") == ".test"

@@ -65,11 +65,18 @@ state it. Publish the full per-repo table so nobody has to trust the aggregate.
 
 ## Acceptance criteria
 
-- [ ] Full dev-split run reproduces to within seed variance across two invocations
-- [ ] All seven arms run and produce `docs/results/<arm>.md`
-- [ ] `docs/results/main.md` has the headline table with CIs and the per-repo appendix
-- [ ] Test split run **once**, at the end, and the number is whatever it is (I5)
-- [ ] Total eval cost measured and reported
+- [~] Full dev-split run reproduces to within seed variance across two invocations —
+  PARTIAL. `t1_only` ran k=3 and was byte-identical on 7/7 repos, establishing the harness
+  is deterministic. The LLM arms could never be run k=3: free-tier quota died partway
+  through every sweep across four providers, and D74 shows the resulting per-seed spread
+  measures quota state, not sampling.
+- [x] All seven arms run and produce `docs/results/<arm>.md`
+- [x] `docs/results/main.md` has the headline table with CIs and the per-repo appendix
+- [x] Test split run **once**, at the end, and the number is whatever it is (I5) — run 1 of
+  3 permitted, 2026-09-08. **Held-out pass_rate = 0.028** vs 0.396 on dev
+  (`docs/results/graph.test.md`, docs/decisions.md D83). The corpus needed a test split
+  built first (D79 → D82).
+- [x] Total eval cost measured and reported
 
 ## After this phase
 
