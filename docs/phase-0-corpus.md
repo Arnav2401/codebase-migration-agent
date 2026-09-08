@@ -96,16 +96,15 @@ corpus after you have numbers means re-running everything; treat it as a version
 - [ ] ≥30 repos (or a documented fallback in use), each with a recorded baseline pass set
 - [ ] Drop-reason histogram written to `docs/results/corpus.md`
 - [ ] Two runs of baseline capture produce identical pass sets (determinism check)
-- [~] dev/test split assigned and stratified — PARTIAL. The split EXISTS
-  (`Netflix__repokid` carries `split="test"`, so the corpus is no longer dev-only) but has
-  no usable repo yet: that repo fails baseline capture at the post_sha sanity gate (0.69 —
-  the human's own migration commit no longer keeps its tests passing in a clean container),
-  so I4 leaves nothing to score. Kept with `baseline: null` at the configuration that got
-  furthest. Discovery was widened twice (103 → 126 → 163 candidates) for this; it yielded
-  2 survivors, both unusable. See docs/decisions.md D79 (why dev repos must not be
-  relabelled as test), D80 (a clone bug that misreported 27% of drops, since fixed) and
-  D81 (the widened search and both failures). phase-5-eval.md's test-split criterion stays
-  blocked.
+- [x] dev/test split assigned and stratified — DONE (docs/decisions.md D82). 7 dev repos
+  and 2 held-out test repos (`lnbits__lnurl`, 125 baseline-passing tests;
+  `isaacharrisholt__quiffen`, 255), both fully baselined. Genuinely held out: both were
+  discovered, validated and baselined only after every dev-split result was collected, so
+  nothing has been tuned against them. Reaching them took the candidate pool from 103 to
+  254 across three rounds (D80 fixed a clone bug misreporting 27% of drops; D81 widened the
+  queries; D82 added v1-only markers like `orm_mode`, the signal that finally worked).
+  Yield was ~0.8%: the binding filter is not "did it migrate" but "does its suite still
+  build, and does its own migration commit still keep it green".
 
 ## Pitfalls
 

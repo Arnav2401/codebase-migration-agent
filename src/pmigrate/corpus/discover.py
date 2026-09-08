@@ -55,6 +55,12 @@ COMMIT_MESSAGE_QUERIES = [
     "upgrade pydantic language:python",
     "pydantic 2 upgrade language:python",
     "pydantic-settings language:python",
+    # D82: the 8-query set still yielded no baseline-capturable repo. These target the
+    # commit vocabulary the others miss -- compatibility work and version-support phrasing
+    # rather than the word "migrate".
+    "support pydantic v2 language:python",
+    "pydantic compatibility language:python",
+    "fix pydantic language:python",
 ]
 
 CODE_SEARCH_QUERIES = [
@@ -81,6 +87,16 @@ CODE_SEARCH_QUERIES = [
     "from pydantic import validator language:python",
     "model_validator language:python",
     "parse_raw language:python",
+    # D82: v1-ONLY config keys, the sharpest signal in this file. `orm_mode` and
+    # `allow_population_by_field_name` were RENAMED in v2 (to from_attributes and
+    # populate_by_name), so code still containing them is either pre-migration or was
+    # migrated incompletely -- neither can be true of a codebase that never touched v1.
+    # `TypeAdapter`/`model_config = ConfigDict` are the v2 side of the same boundary,
+    # included so repos that finished the rename still surface for commit location.
+    "orm_mode language:python",
+    "allow_population_by_field_name language:python",
+    "TypeAdapter language:python",
+    "model_config = ConfigDict language:python",
 ]
 
 

@@ -3872,6 +3872,56 @@ container years later."
 
 ---
 
+## D82 — The corpus has a real test split: `lnbits__lnurl` and `isaacharrisholt__quiffen`
+
+**Why:** D79 found the corpus had no test half at all; D81 widened discovery to 163
+candidates and still produced nothing baseline-capturable. This round closes it.
+
+**What worked.** Three more commit-message queries and four more code-search queries, the
+sharpest being **v1-only config keys**: `orm_mode` and `allow_population_by_field_name`
+were RENAMED in v2 (`from_attributes`, `populate_by_name`), so code still containing one is
+either pre-migration or migrated incompletely — neither is possible in a codebase that
+never touched v1. That is a strictly stronger signal than "mentions pydantic", which is
+what the original queries leaned on and what D34 already flagged as too weak.
+
+Pool 163 → **254**. The 92 fresh candidates yielded **7 survivors** — against 1 from the
+previous 60 — and 2 of those captured a baseline:
+
+| repo | python | tests passing at baseline |
+|---|---|---|
+| `lnbits__lnurl` | 3.11 | **125** |
+| `isaacharrisholt__quiffen` | 3.11 | **255** |
+
+**The other five were removed by hand**, the curation step `capture_baselines.py` leaves to
+a human, because each failed for a property of the repo rather than of this run: three
+cannot build in a clean container at all (`VOICEVOX__voicevox_engine`,
+`atlasacademy__fgo-game-data-api`, `yodhcn__dlsite-doujin-renamer`), `iterative__gto`'s
+suite does not collect, and `spruceid__siwe-py` gets 0 tests passing against a `>= 15`
+floor. `Netflix__repokid` went too (D81's 0.69 post_sha failure). A test repo with no
+baseline is unusable under I4 and makes `run_repo` raise, so leaving them in would be a
+trap, not a record.
+
+**Yield, stated plainly:** 254 candidates → 2 usable held-out repos. About 0.8%. The
+binding constraint was never finding repos that migrated pydantic; it is finding ones whose
+test suite still builds and whose own migration commit still keeps it green, years later,
+in a container with no side services.
+
+**This unblocks phase-5-eval.md's final acceptance criterion**, and closes
+`docs/phase-0-corpus.md`'s long-unticked "dev/test split assigned and stratified" box. The
+split is genuinely held out: both repos were discovered, validated and baselined after
+every dev-split result in this project was already collected, so nothing has been tuned
+against them.
+
+**Interview:** "The corpus had no test split for five phases and my first two attempts to
+add one produced nothing usable. What finally worked was searching for v1-only config keys
+— `orm_mode`, `allow_population_by_field_name` — because those were renamed in v2, so their
+presence proves a codebase touched v1, where 'mentions pydantic' proves nothing. Yield was
+still brutal: 254 candidates for 2 usable repos. The filter that kills most of them isn't
+whether they migrated, it's whether their suite still runs and their own migration commit
+still passes years later."
+
+---
+
 ## Template
 
 ```
