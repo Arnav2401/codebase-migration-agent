@@ -28,6 +28,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ruff>=0.4",
+    # Phase 8's security regression gate (docs/decisions.md D98). In `dev` rather than a
+    # separate extra because the gate's own tests run it for real against a temp tree, so a
+    # dev install that lacks it would fail the suite rather than skip it.
+    "bandit>=1.7",
     "mypy>=1.10",
     "pre-commit>=3.7",
     "pytest-cov>=5.0",

@@ -1,5 +1,14 @@
 # Phase 8 — Optional extensions
 
+> **Status (docs/decisions.md D98):** the **security regression gate is BUILT**
+> (`security/regression.py`, verified live: 68 findings before and after on
+> `madkote__fastapi-plugins`). **LoRA distillation is DECLINED on evidence** — it needs
+> thousands of verified-good patches and this project has 28 applied patches whose measured
+> effect on `pass_rate` D93 showed to be near-zero, so it would distil a teacher already
+> known to be bad. **The MCP server is deferred**, not rejected: feasible and sound, but it
+> adds no measurement, and every open question here is blocked on evidence rather than
+> interface.
+
 **Locked until Phases 1–7 are done. Four components done properly beats ten done partially.**
 
 ## Semgrep / Bandit security regression gate (~2 days)

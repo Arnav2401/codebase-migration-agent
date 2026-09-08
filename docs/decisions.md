@@ -4648,6 +4648,62 @@ policy by name."
 
 ---
 
+## D98 — Phase 8: the security regression gate, and why the other two extensions were declined
+
+**Phase 8 offers three optional extensions and says "four components done properly beats
+ten done partially". Taking that at its word, one was built and two were declined on
+evidence.**
+
+### Built: the security regression gate
+
+Scans before and after the migration and fails the run if the posture *worsened*. The
+load-bearing word is worsened: it reports only what the migration INTRODUCED, ignoring what
+the repo already had. That is the same principle as invariant I4, which scores only tests
+that passed at baseline — a migration answers for what it changed, not for the state it
+inherited. A gate that failed on inherited findings would be unusable on real code, and an
+unusable gate gets switched off, which is worse than not having one.
+
+Three details that decide whether it survives contact with real repos:
+
+- **Findings are keyed by `(test_id, path, code)`, never by line number.** A migration that
+  edits a file above an untouched finding shifts its line, and a line-keyed gate would
+  report that pre-existing issue as newly introduced. That false positive is precisely what
+  gets a regression gate disabled.
+- **A scanner that cannot run fails CLOSED.** An unavailable gate reporting success is worse
+  than no gate, because it looks like coverage — a lesson this project just paid for in D97,
+  where a passing test made a false security claim look verified.
+- **Bandit, not Semgrep**: pip-installable and Python-native, so no system dependency. Only
+  `run_scan` is analyzer-specific; swapping in Semgrep means replacing that one function.
+
+Verified live on a real migration (`madkote__fastapi-plugins`): 68 findings before, 68
+after, gate passes — and end-to-end in tests against the real scanner, where an introduced
+`subprocess.run(shell=True)` is caught.
+
+### Declined: LoRA distillation
+
+The plan itself says "worth zero if Phases 1–5 aren't solid, because you'd be distilling a
+bad teacher", and requires "thousands" of `(failure → green patch)` pairs. This project has
+**28 applied patches in total**, of which the ones that moved `pass_rate` number in the
+single digits, and D93 showed the teacher's own patches are frequently wrong. Building it
+would produce a number with no content — the failure mode this project has spent D92, D93
+and D97 learning to recognise. Declining is the plan's own advice followed, not a shortcut.
+
+### Declined for now: the MCP server
+
+Genuinely feasible (~2 days) and the argument for it is sound — the tool surface is a
+capability, not an app. It is declined only because it adds no measurement and this
+project's remaining open questions (does the dev improvement generalize? does the
+retrieval ablation separate?) are all blocked on evidence rather than on interface.
+
+**Interview:** "Phase 8 was a menu, and I took one item. The gate reports only what the
+migration introduced, because a repo's pre-existing findings aren't the migration's fault
+and a gate that blames you for them gets turned off. I declined the LoRA arm because it
+needs thousands of verified good patches and I have 28 applied patches whose value I'd just
+finished measuring as near-zero — I'd have been distilling a teacher I had evidence was
+bad."
+
+---
+
 ## Template
 
 ```
