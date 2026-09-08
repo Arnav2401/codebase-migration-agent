@@ -4751,6 +4751,44 @@ data can confirm a property the real tool's output format breaks."
 
 ---
 
+## D100 — A test deselected for a whole session is a broken test
+
+**The test.** `test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially`
+asserted `elapsed < delay_s * 2` — four fake repos each sleeping 0.3s, so sequential
+execution would take 1.2s and concurrent execution should land near 0.3s.
+
+**Why it failed.** The 0.6s budget covers only the sleeps. Everything else `run_corpus` does
+per repo is real work: a git clone from the cache, scoring, diff-similarity, trace writes,
+and (since D99) a scanner subprocess. On a loaded machine that overhead alone exceeds the
+budget, so the test failed on an unchanged codebase — verified by stashing every local
+change and watching it fail on `main`.
+
+**What I did about it for most of a session: deselected it.** Every full-suite run in this
+project's recent history carried
+`--deselect ...test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially`.
+That is worth naming as its own mistake. A permanently-skipped test protects nothing while
+still appearing in the file as coverage, and the habit of routing around it made the real
+suite quietly smaller every time it ran.
+
+**The fix is to assert the property rather than a proxy for it.** `_SlowFakeSandbox` now
+records how many `run_tests` calls are in flight simultaneously, and the test asserts
+`max_in_flight > 1`. Sequential execution can never have two calls in flight at once,
+however fast or slow the host is — so the assertion is exactly the claim, and machine speed
+cannot enter into it. Wall-clock never belonged in the assertion; it was standing in for
+concurrency because concurrency was not being observed directly.
+
+Verified: 5 consecutive runs pass, and the full suite now runs **554 tests with nothing
+deselected**.
+
+**Interview:** "There was a concurrency test that measured elapsed time and failed when the
+machine was busy, so I'd been deselecting it — for a whole working session, which meant
+every green suite I reported was one test short. The fix was to stop measuring a proxy: the
+fake sandbox counts how many calls are in flight, and sequential code can never have two.
+The timing assertion was never testing concurrency, it was testing that the laptop wasn't
+busy."
+
+---
+
 ## Template
 
 ```

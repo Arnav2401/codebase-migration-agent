@@ -541,6 +541,10 @@ class _SlowFakeSandbox:
 
     delay_s: float
     response: TestRun
+    # Observed concurrency, recorded directly rather than inferred from elapsed time.
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _in_flight: int = 0
+    max_in_flight: int = 0
 
     def build(self, repo, pydantic):  # type: ignore[no-untyped-def]
         return ImageRef(
@@ -553,7 +557,14 @@ class _SlowFakeSandbox:
         )
 
     def run_tests(self, image, workdir_overlay, policy, selection=None):  # type: ignore[no-untyped-def]
-        time.sleep(self.delay_s)
+        with self._lock:
+            self._in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        try:
+            time.sleep(self.delay_s)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
         return self.response
 
 
@@ -574,15 +585,26 @@ def _clonable_repo_spec(tmp_path: Path, name: str) -> RepoSpec:
 def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
     tmp_path: Path,
 ) -> None:
+    """docs/decisions.md D100: asserts OBSERVED overlap, not elapsed wall-clock.
+
+    The original assertion was `elapsed < delay_s * 2`, which conflates "did this run
+    concurrently" with "is this machine fast right now". Everything around the sleep --
+    git clone from the cache, scoring, diff-similarity, trace writes -- is real work whose
+    cost is not budgeted for, so the test failed under load on an unchanged codebase and
+    was deselected for a whole working session. A test that is routinely skipped protects
+    nothing.
+
+    The sandbox now records how many `run_tests` calls are in flight simultaneously, which
+    is the property under test and is independent of how fast any of them are.
+    """
     n_repos = 4
-    delay_s = 0.3
+    sandbox = _SlowFakeSandbox(delay_s=0.3, response=_passed_run())
     repos = [_clonable_repo_spec(tmp_path, f"repo{i}") for i in range(n_repos)]
 
-    start = time.time()
     results = run_corpus(
         repos,
         work_root=tmp_path / "work",
-        sandbox=_SlowFakeSandbox(delay_s=delay_s, response=_passed_run()),
+        sandbox=sandbox,
         model_client=None,
         config=_config(),
         max_workers=n_repos,
@@ -590,13 +612,13 @@ def test_run_corpus_with_max_workers_runs_repos_concurrently_not_sequentially(
         trace_root=tmp_path / "traces",
         run_security_gate=False,
     )
-    elapsed = time.time() - start
 
     assert len(results) == n_repos
-    # sequential would take >= n_repos * delay_s (1.2s); real concurrency should land
-    # close to one delay_s plus git/scoring overhead. A generous bound (well under 2x one
-    # delay) avoids flakiness while still failing hard if this silently ran sequentially.
-    assert elapsed < delay_s * 2
+    # >1 is the whole claim: sequential execution can never have two calls in flight at
+    # once, however slow or fast the host is.
+    assert sandbox.max_in_flight > 1, (
+        f"run_corpus ran sequentially: max {sandbox.max_in_flight} test run(s) in flight"
+    )
 
 
 def test_run_corpus_shares_one_embedder_instance_across_concurrent_repos(

@@ -110,7 +110,7 @@ pmigrate dashboard                                # docs/results/dashboard.html
 
 ## Where it stands
 
-553 tests, `mypy --strict`, ruff clean. All eight phases addressed. Genuinely open, each
+554 tests (none skipped), `mypy --strict`, ruff clean. All eight phases addressed. Genuinely open, each
 blocked on something specific rather than on effort:
 
 - **No PR has been opened.** The body generator and fork-only guard are built and dry-run;
@@ -125,4 +125,4 @@ blocked on something specific rather than on effort:
   [D95](docs/decisions.md)
 
 Full reasoning for every decision — including the wrong ones, kept unedited with corrections
-appended — is in [docs/decisions.md](docs/decisions.md) (100 entries).
+appended — is in [docs/decisions.md](docs/decisions.md) (101 entries).
