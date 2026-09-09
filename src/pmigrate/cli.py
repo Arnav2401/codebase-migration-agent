@@ -7,6 +7,7 @@ import typer
 
 from pmigrate.corpus import capture_baselines, discover, validate
 from pmigrate.dashboard import cli as dashboard_cli
+from pmigrate.eval import ablation_cli
 from pmigrate.eval import report_cli as eval_report
 from pmigrate.eval import run as eval_run
 from pmigrate.trace import replay_cli
@@ -26,6 +27,7 @@ app.add_typer(triage_app, name="triage")
 
 eval_app = typer.Typer(help="Run the migration loop across the corpus and score it (Phase 5).")
 eval_app.command("run")(eval_run.main)
+eval_app.command("ablation")(ablation_cli.main)
 eval_app.command("report")(eval_report.main)
 app.add_typer(eval_app, name="eval")
 
